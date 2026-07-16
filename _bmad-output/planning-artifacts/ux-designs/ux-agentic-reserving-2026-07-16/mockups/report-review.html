@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Mock — Report Review (Senior Actuary role)</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+:root{--primary:#0E5E59;--prov:#5B4B9E;--prov-sub:#EEEBF7;--pub:#166534;--pub-sub:#E8F5EC;
+--ink:#111827;--muted:#6B7280;--border:#E5E7EB;--bg:#FAFAF9;--card:#FFFFFF;}
+*{box-sizing:border-box;margin:0}
+body{font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;color:var(--ink);background:var(--bg);font-size:14px;padding-bottom:70px}
+.mono{font-family:ui-monospace,"Geist Mono",Menlo,monospace;font-size:13px}
+header{background:var(--card);border-bottom:1px solid var(--border);padding:10px 24px;display:flex;gap:24px;align-items:center}
+.crumb{color:var(--muted);font-size:13px}
+.badge{border-radius:9999px;padding:3px 12px;font-size:12px;font-weight:600}
+.badge.awaiting{background:#FEF3E2;color:#B45309}
+.steps{display:flex;gap:4px;margin-left:auto;font-size:12px}
+.step{padding:4px 10px;border-radius:9999px;color:var(--muted)}
+.step.done{color:var(--primary)}.step.done::before{content:"✓ "}
+.step.now{background:var(--primary);color:#fff;font-weight:600}
+.step.off{opacity:.45}
+main{display:grid;grid-template-columns:1fr 320px;gap:20px;padding:20px 24px;max-width:1280px;margin:0 auto}
+.doc{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:32px 40px}
+.doc h1{font-size:28px;font-weight:600;letter-spacing:-.01em;margin-bottom:2px}
+.doc .sub{color:var(--muted);font-size:13px;margin-bottom:24px}
+.doc h2{font-size:15px;font-weight:600;margin:22px 0 8px}
+.doc p{line-height:1.65;margin-bottom:10px}
+.chip{display:inline-block;background:var(--prov-sub);color:var(--prov);border-radius:9999px;padding:1px 9px;font-family:ui-monospace,monospace;font-size:11px;vertical-align:1px;white-space:nowrap}
+.num{font-family:ui-monospace,monospace;font-size:13px}
+.override{border:1px solid var(--border);border-left:3px solid var(--primary);border-radius:6px;padding:10px 14px;margin:10px 0;font-size:13px;background:#F8FAFA}
+.override .who{color:var(--muted);font-size:12px;margin-top:4px}
+.rail{height:fit-content;position:sticky;top:20px;display:flex;flex-direction:column;gap:14px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:16px}
+.card h4{font-size:12px;color:var(--muted);font-weight:500;margin-bottom:8px}
+.cite-row{display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid #F3F4F6;font-size:12px}
+.ok{color:var(--pub);font-weight:600}
+.gate{font-size:13px}
+.gate .big{font-size:22px;font-weight:600;font-family:ui-monospace,monospace}
+footer{position:fixed;left:0;right:0;bottom:0;background:var(--card);border-top:1px solid var(--border);padding:12px 24px;display:flex;align-items:center;gap:18px}
+footer .fill{flex:1}
+.btn{border:1px solid var(--border);background:var(--card);border-radius:6px;padding:9px 18px;font-size:14px;cursor:default}
+.btn.approve{background:var(--pub);border-color:var(--pub);color:#fff;font-weight:600}
+.meta{font-size:12px;color:var(--muted)}
+</style></head><body>
+
+<header>
+  <strong style="color:var(--primary)">Reserving Copilot</strong>
+  <span class="crumb">Motor Portfolio &rsaquo; Run #2026Q2-014 &rsaquo; Report</span>
+  <span class="badge awaiting">Awaiting review</span>
+  <nav class="steps">
+    <span class="step done">Upload</span><span class="step done">Triangle</span><span class="step done">Run</span>
+    <span class="step done">Diagnostics</span><span class="step now">Report</span><span class="step off">Published</span>
+  </nav>
+</header>
+
+<main>
+<article class="doc">
+  <h1>Reserve Report — Motor, 2026 Q2</h1>
+  <div class="sub">Draft v1 · submitted by Dana K. · Drafted by the interpretation layer — every claim cites a diagnostic</div>
+
+  <h2>Executive summary</h2>
+  <p>Held IBNR for the motor portfolio is <span class="num">£31.4m</span> across accident years 2016–2025, a movement of <span class="num">+£1.8m</span> against the prior quarter driven principally by stronger-than-expected emergence in AY&nbsp;2024 <span class="chip">D-AVE-08</span>. Development factors remain stable at maturities beyond 36 months <span class="chip">D-LDF-04</span> <span class="chip">D-LDF-07</span>.</p>
+
+  <h2>Method selection rationale</h2>
+  <p>Chain Ladder is retained for AY&nbsp;2016–2022, where the divergence between CL and BF ultimates is below <span class="num">2%</span> <span class="chip">D-DIV-03</span> and link ratios show low variability <span class="chip">D-LDF-05</span>. For AY&nbsp;2023–2025, Bornhuetter-Ferguson is recommended: CL–BF divergence widens to <span class="num">14.2%</span> in the greenest year <span class="chip">D-DIV-10</span>, where the leverage of the 12–24m factor <span class="chip">D-LDF-02</span> makes CL ultimates unstable.</p>
+
+  <div class="override">
+    <strong>Override — AY 2025:</strong> recommendation CL → <strong>BF</strong>.
+    "Immature year; a priori from the 2026 plan is better grounded than one diagonal of paid emergence."
+    <div class="who">Priya N. · Senior Actuary · pending approval</div>
+  </div>
+
+  <h2>Movement commentary</h2>
+  <p>Actual emergence on the latest diagonal exceeded expected by <span class="num">+9.8%</span> in AY&nbsp;2024 <span class="chip">D-AVE-08</span>, concentrated in the 12–24m development window <span class="chip">D-RES-19</span>. Residuals elsewhere show no systematic pattern <span class="chip">D-RES-01</span>.</p>
+
+  <h2>Limitations</h2>
+  <p>Mack standard errors assume independence of development periods; the AY&nbsp;2024 residual concentration <span class="chip">D-RES-19</span> warrants monitoring next quarter. A priori loss ratios for BF are user-supplied planning assumptions, not derived by this system.</p>
+</article>
+
+<aside class="rail">
+  <div class="card gate">
+    <h4>Provenance</h4>
+    <div class="big ok">41 / 41</div>
+    <div class="meta">claims cite a resolving diagnostic</div>
+  </div>
+  <div class="card">
+    <h4>Citations in this draft</h4>
+    <div class="cite-row"><span class="chip">D-AVE-08</span><span class="ok">resolves ✓</span></div>
+    <div class="cite-row"><span class="chip">D-DIV-10</span><span class="ok">resolves ✓</span></div>
+    <div class="cite-row"><span class="chip">D-LDF-02</span><span class="ok">resolves ✓</span></div>
+    <div class="cite-row"><span class="chip">D-RES-19</span><span class="ok">resolves ✓</span></div>
+    <div class="meta" style="margin-top:8px">+ 37 more · all resolve</div>
+  </div>
+  <div class="card">
+    <h4>Review activity</h4>
+    <div class="meta">Dana K. submitted for review · 11:42<br>Priya N. overrode AY 2025 method · 14:07<br>Priya N. edited executive summary · 14:19</div>
+  </div>
+</aside>
+</main>
+
+<footer>
+  <span class="meta"><strong class="ok">41/41 citations resolve.</strong> One override recorded. Approval will be logged and the published version cannot be edited.</span>
+  <span class="fill"></span>
+  <button class="btn">View diff since draft</button>
+  <button class="btn approve">Approve &amp; Publish</button>
+</footer>
+</body></html>
