@@ -8,13 +8,23 @@
  * @module
  */
 
+import type * as audit from "../audit.js";
+import type * as http from "../http.js";
+import type * as lib_clerkWebhook from "../lib/clerkWebhook.js";
+import type * as lib_guards from "../lib/guards.js";
+
 import type {
   ApiFromModules,
   FilterApi,
   FunctionReference,
 } from "convex/server";
 
-declare const fullApi: ApiFromModules<{}>;
+declare const fullApi: ApiFromModules<{
+  audit: typeof audit;
+  http: typeof http;
+  "lib/clerkWebhook": typeof lib_clerkWebhook;
+  "lib/guards": typeof lib_guards;
+}>;
 
 /**
  * A utility for referencing Convex functions in your app's public API.

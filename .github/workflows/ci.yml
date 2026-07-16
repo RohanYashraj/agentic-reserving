@@ -41,7 +41,9 @@ jobs:
         run: npm ci
       - name: Lint
         run: npm run lint
-      - name: Typecheck
+      - name: Typecheck (app)
         run: npx tsc --noEmit
+      - name: Typecheck (convex)
+        run: npx tsc --noEmit -p convex
       - name: Run Vitest
         run: npm test

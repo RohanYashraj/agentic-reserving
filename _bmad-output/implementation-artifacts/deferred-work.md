@@ -13,6 +13,14 @@
 - proxy.ts matcher exempts non-API paths ending in static extensions (`.csv`, `.xlsx`, …) from auth. Official Clerk matcher; fine while downloads are API/Convex-storage routes — revisit if a page route ever serves an extension-suffixed path.
 - ~~Sidebar nav has no active-route state or `aria-current` (app/(app)/layout.tsx). Land with the shadcn/brand-token pass in Story 1.3.~~ **Resolved in Story 1.3** — `components/SidebarNav.tsx` client component with `usePathname` + `aria-current="page"`.
 
+## Deferred from: code review of 1-4-workspace-scoping-and-role-guards (2026-07-16)
+
+- Svix-id replay/idempotency: the same signed webhook delivered twice within Svix's timestamp window re-invokes `recordEvent`, producing duplicate audit entries once Story 1.5 persists. Make 1.5's `appendAuditEntry` idempotent on the `svix-id` message id (or dedupe seen ids). [convex/http.ts]
+- `convex/http.test.ts` "invalid signature → 400 and no event recorded" only asserts the 400 status, not that `recordEvent` was never invoked. Not assertable until Story 1.5 gives `recordEvent` an observable effect; add the non-invocation assertion then. [convex/http.test.ts]
+- `organizationMembership.updated` is always mapped to `member.role_changed`, even for non-role membership updates (metadata/permissions). Revisit the event taxonomy when Story 1.5 builds the audit log; the full payload is preserved for disambiguation. [convex/lib/clerkWebhook.ts]
+- The NFR-3 auth-guard enumeration test detects `isPublic` query/mutation/action exports only — `httpRouter` routes are invisible to it. Intentional for this story (the webhook is signature-verified, not `requireMember`-guarded). Extend coverage when a future story adds an authenticated HTTP route that reaches Convex data. [convex/authGuard.test.ts]
+- A recognized `organizationMembership.*` event missing `organization.id` is silently acknowledged (200, no Svix retry) — indistinguishable from an ignored event type. Audit-completeness concern once persistence lands; decide in Story 1.5 whether such anomalies should fail loud (500 → retry) or alert. [convex/lib/clerkWebhook.ts]
+
 ## Deferred from: code review of 1-3-brand-layer-design-tokens-and-status-badge (2026-07-16)
 
 - StatusBadge has no fallback for an out-of-union runtime `status` (`components/StatusBadge.tsx`). `statusClasses[status]` is `undefined` for an unknown value, rendering a bare `secondary` badge with no family color. Not reachable today (only typed call site is `/dev/tokens`); revisit when Run/Report status data wires up in Epic 4 — validate the status field at the Convex boundary rather than trusting untyped data reaching the component.
