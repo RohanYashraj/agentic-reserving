@@ -30,10 +30,10 @@ graph TD
     end
     subgraph "Compute + agent plane (Python, one Cloud Run container)"
         SVC["engine_service (FastAPI)<br/>imperative shell + provenance gate"]
-        AGENT["copilot_agent<br/>(Anthropic SDK tool loop)"]
+        AGENT["copilot_agent<br/>(Agno agent over google-genai)"]
         ENG["reserving_engine<br/>pure functions, no I/O"]
     end
-    LLM["Claude API (model plane)"]
+    LLM["Gemini API — gemini-3.1-flash-lite<br/>(model plane)"]
     CLERK["Clerk (identity, orgs, roles)"]
 
     FE --> CVX
@@ -96,7 +96,7 @@ Dependency direction is strict and downward as drawn. Nothing calls upward: `res
 
 - **Binds:** `copilot_agent` (FR-9)
 - **Prevents:** the agent acquiring a write path, raw-file access, or data beyond the Run.
-- **Rule:** the agent's tool surface exposes only typed read views over the current Run's ResultSet and DiagnosticsBundle (plus their metadata) already held in `engine_service` memory for that request — no filesystem, no network, no Convex access, no write operations. Tool schemas and prompts are kept **provider-neutral** (plain JSON Schema, no Anthropic-specific prompt constructs beyond the SDK call site) so the model provider remains a contained swap. Every tool call and result is captured for the Audit Log.
+- **Rule:** the agent's tool surface exposes only typed read views over the current Run's ResultSet and DiagnosticsBundle (plus their metadata) already held in `engine_service` memory for that request — no filesystem, no network, no Convex access, no write operations. Tool schemas and prompts are kept **provider-neutral** (plain JSON Schema); Agno's model abstraction is the only provider-specific seam, and its Gemini integration sits on the official `google-genai` SDK, which absorbs Gemini 3.x thought-signature handling in tool loops — never call the model API raw. The model ID (`gemini-3.1-flash-lite`) is config, so a swap stays a contained change. Every tool call and result is captured for the Audit Log.
 
 ### AD-9 — Interpretation fails closed into Engine-Only Mode
 
@@ -146,7 +146,9 @@ Dependency direction is strict and downward as drawn. Nothing calls upward: `res
 | chainladder | 0.9.2 |
 | pandas | pinned via uv.lock (chainladder-compatible) |
 | FastAPI | 0.139.0 |
-| anthropic (Python SDK) | 0.116.0 |
+| agno | 2.x (2.5.17 verified current; lockfile-pinned at scaffold) |
+| google-genai (official Gemini SDK, via Agno) | latest at scaffold, then uv.lock-pinned |
+| Gemini model | gemini-3.1-flash-lite (config value) |
 | Node / Next.js (App Router) | Next.js 16.2.x |
 | convex (npm) | latest at scaffold, then lockfile-pinned |
 | @convex-dev/workflow | 0.3.10 |
@@ -161,7 +163,7 @@ agentic-reserving/
   engine/                      # Python plane — one uv project, one Cloud Run image
     reserving_engine/          # pure core: methods, diagnostics, validation, schemas (Pydantic)
     engine_service/            # FastAPI shell: routes, service auth, provenance gate, config
-    copilot_agent/             # Anthropic SDK tool loop + read-only tool views
+    copilot_agent/             # Agno agent (google-genai under the hood) + read-only tool views
     tests/                     # golden masters (Taylor-Ashe), property tests, gate tests
   convex/                      # schema.ts, auth guards, per-table functions, actions, auditLog
   app/                         # Next.js App Router (Clerk components, Convex hooks)
@@ -180,7 +182,7 @@ erDiagram
     REPORT ||--o{ REPORT : "new version supersedes"
 ```
 
-Deployment: Next.js on Vercel; Convex cloud (dev + prod deployments); `engine/` as one container on Cloud Run (min instances ≥ 1 to avoid cold-start on run submission is a tuning knob, not an invariant). Environments: local (`convex dev` + uvicorn), preview (Vercel preview + Convex preview deployment + shared dev engine), prod. Secrets: `ANTHROPIC_API_KEY` + service secret in Cloud Run only; Clerk keys in Vercel + Convex env; per AD-12.
+Deployment: Next.js on Vercel; Convex cloud (dev + prod deployments); `engine/` as one container on Cloud Run (min instances ≥ 1 to avoid cold-start on run submission is a tuning knob, not an invariant). Environments: local (`convex dev` + uvicorn), preview (Vercel preview + Convex preview deployment + shared dev engine), prod. Secrets: `GEMINI_API_KEY` + service secret in Cloud Run only; Clerk keys in Vercel + Convex env; per AD-12.
 
 ## Capability → Architecture Map
 
@@ -201,7 +203,7 @@ Deployment: Next.js on Vercel; Convex cloud (dev + prod deployments); `engine/` 
 - **.docx export library choice** (python-docx in engine_service vs a TS lib in a Convex action) — either satisfies AD-1 since it renders from stored, gated content; decide in the report epic.
 - **Async 202 + HMAC callback activation** — contract headroom exists (AD-7); activate only if synchronous awaits hit Convex action time limits with real triangles. **Known gap tied to this:** under synchronous orchestration, an action crash mid-Interpretation loses the in-memory LLM transcript, denting NFR-5's 100% on that failure path; the failure itself is logged, but full-transcript durability under crash (incremental per-tool-turn flush, or engine-side spool returned on retry) lands with the async upgrade.
 - **Observability/alerting beyond platform defaults** — Cloud Run, Convex, and Vercel dashboards suffice for v1; dedicated alerting (job failure rate vs NFR-4, model-API error budget) is a hardening-phase decision.
-- **Per-Run token/cost ceiling values and model ID final choice** — config values, set at agent-layer eval (PRD OQ-1 note; provider now Anthropic per this spine's adoption).
+- **Per-Run token/cost ceiling values** — config, set at agent-layer eval. Provider is settled (PRD OQ-1 closed 2026-07-16: Gemini `gemini-3.1-flash-lite` via Agno, per the brief's original commitment); the model ID stays a config value, so a swap-up to a heavier Gemini model remains an eval-driven change.
 - **Incurred-triangle validation rules** — needs actuarial confirmation (PRD OQ-6) before the ingestion epic hardens; monotonicity applies to paid only until then.
 - **SSO (SAML/OIDC) enablement** — Clerk-config change by design (FR-17); no architecture work deferred with it.
 - **Streaming interpretation output** — UX chose gated-complete display; revisit only on design-partner feedback.

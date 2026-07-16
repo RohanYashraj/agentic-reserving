@@ -128,7 +128,7 @@ An Analyst or Senior Actuary can review Diagnostics visually (stability charts, 
 
 ### 4.4 Agentic Interpretation Layer
 
-**Description:** The interpretation model reads **only** the validated ResultSet and Diagnostics JSON, through read-only, schema-typed tool calls — never raw files, never free numbers. It recommends a Method per Origin Period with explicit reasons and drafts the Reserve Report. The Provenance Gate programmatically rejects any claim that does not cite a resolvable Diagnostic ID. The layer degrades to Engine-Only Mode when the model API is unavailable. [ASSUMPTION: "the interpretation model" is Gemini `gemini-3.1-flash-lite` behind Agno per the finalized brief; the user's requirement list said "Claude". The model is a config value either way — see Open Question OQ-1.]
+**Description:** The interpretation model reads **only** the validated ResultSet and Diagnostics JSON, through read-only, schema-typed tool calls — never raw files, never free numbers. It recommends a Method per Origin Period with explicit reasons and drafts the Reserve Report. The Provenance Gate programmatically rejects any claim that does not cite a resolvable Diagnostic ID. The layer degrades to Engine-Only Mode when the model API is unavailable. The interpretation model is Gemini `gemini-3.1-flash-lite` behind the Agno agent framework, confirmed by Rohan on 2026-07-16 (OQ-1 resolved); the model ID remains a config value.
 
 #### FR-9: Read-only tool access
 The interpretation model can access Run data exclusively through read-only tools returning the validated ResultSet and Diagnostics JSON; no other data path exists. Realizes UJ-1.
@@ -283,7 +283,7 @@ The app guides a user through the full sequence with clear state at each step, a
 
 ## 10. Open Questions
 
-1. **OQ-1 — Interpretation model provider.** The finalized brief commits to Gemini (`gemini-3.1-flash-lite`) + Agno; the PRD invocation said "Claude." Model ID is a config value and Agno is provider-agnostic, so this is an eval-driven config choice, not architecture — but it should be settled explicitly before the agent layer is built. Owner: Rohan. Revisit: at agent-layer eval.
+1. **OQ-1 — Interpretation model provider. RESOLVED 2026-07-16:** Rohan confirmed Gemini (`gemini-3.1-flash-lite`) + the Agno agent framework, matching the brief's commitment. Model ID stays a config value (Agno is provider-agnostic), so a swap-up remains an eval-driven configuration change.
 2. **OQ-2 — Design partner.** Stage 2 (SM-2) requires a real reserving team not yet identified — the largest non-technical risk. Owner: Rohan. Revisit: before agent-layer build completes.
 3. **OQ-3 — Regulatory sufficiency review.** Counsel/appointed-actuary review of the audit posture. Owner: Rohan. Revisit: before any external positioning or design-partner pilot.
 4. **OQ-4 — Incumbent AI roadmaps.** ResQ/Arius provenance-gated-LLM status unverified; run `bmad-market-research` before external positioning.
@@ -294,7 +294,7 @@ The app guides a user through the full sequence with clear state at each step, a
 
 - §4.1 FR-2 — Missing cells inside the observed region are hard rejections in v1 (no imputation at ingestion).
 - §4.2 FR-6 — Bit-for-bit reproducibility achievable; epsilon-tolerance fallback is an architecture decision.
-- §4.4 (description) — Interpretation model is Gemini + Agno per brief; "Claude" in the invocation treated as generic. → OQ-1.
+- §4.4 (description) — Interpretation model is Gemini + Agno, confirmed 2026-07-16. → OQ-1 resolved.
 - §4.4 FR-12 — Manual report drafting from a template is available in Engine-Only Mode.
 - §4.5 FR-13 — Published reports are immutable; changes create a new version.
 - §4.6 FR-15 — Hash-chaining is v1 scope (carried from brief success criteria).

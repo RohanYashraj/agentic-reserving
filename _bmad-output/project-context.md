@@ -18,7 +18,8 @@ _This file contains critical rules and patterns that AI agents must follow when 
 
 ## Technology Stack & Versions
 
-- **Python plane** (`engine/`, one uv project): Python 3.11+, chainladder 0.9.2, FastAPI 0.139.0, anthropic 0.116.0, pandas + all deps pinned via `uv.lock`
+- **Python plane** (`engine/`, one uv project): Python 3.11+, chainladder 0.9.2, FastAPI 0.139.0, agno 2.x (2.5.x+) + google-genai (official Gemini SDK), pandas + all deps pinned via `uv.lock`
+- **Model plane**: Gemini `gemini-3.1-flash-lite`, reached only through Agno's model abstraction; the model ID is an engine_service config value
 - **Product plane**: Next.js 16.2.x (App Router), Convex (npm, lockfile-pinned), @convex-dev/workflow 0.3.10, `@clerk/nextjs` with Convex JWT template (template name `convex`), shadcn/ui + Tailwind
 - **Testing**: pytest + Hypothesis (Python), Vitest + convex-test (Convex), Playwright (smoke)
 - **Deployment**: Vercel (Next.js), Convex cloud, Cloud Run (single container for the whole `engine/` project)
@@ -38,7 +39,9 @@ _This file contains critical rules and patterns that AI agents must follow when 
 - **`engine_service` (FastAPI) is the only imperative shell**: all I/O, HTTP, retries, service auth, the provenance gate, and `copilot_agent` hosting. It is stateless between requests and never calls Convex or Clerk.
 - **Convex is the sole system of record.** Anything worth keeping is returned to the calling Convex action and persisted there. Agent conversation state is transient and reconstructable from the Audit Log.
 - **Dependency direction is strict**: frontend → Convex → engine_service → reserving_engine. Nothing calls upward. The browser never calls `engine_service`; every engine endpoint requires the shared service bearer secret (held only in Convex + Cloud Run env).
-- `copilot_agent` tools are **read-only views** over the current Run's ResultSet/DiagnosticsBundle held in memory — no filesystem, network, Convex access, or writes. Keep tool schemas and prompts provider-neutral (plain JSON Schema).
+- `copilot_agent` tools are **read-only views** over the current Run's ResultSet/DiagnosticsBundle held in memory — no filesystem, network, Convex access, or writes. Keep tool schemas and prompts provider-neutral (plain JSON Schema); Agno's model abstraction is the only provider-specific seam.
+- **Always go through Agno / the official `google-genai` SDK** — never raw REST to the Gemini API. Gemini 3.x emits thought signatures on function calls that must be echoed back with tool results or the API 400s; the SDK handles this, raw calls break the tool loop.
+- Agno sessions hold **transient state only** — Convex remains the sole system of record; audit-relevant events are returned to the Convex action for logging, never left in an Agno session store.
 
 ### Auth: no anonymous Convex access (AD-4)
 
@@ -73,7 +76,7 @@ _This file contains critical rules and patterns that AI agents must follow when 
 ### Development Workflow Rules
 
 - Build sequencing is fixed: engine + golden tests first → product spine → durable orchestration → agent layer last → hardening.
-- Secrets: `ANTHROPIC_API_KEY` + service secret exist only in Cloud Run env; Clerk keys in Vercel + Convex env. Never in the repo or frontend bundle. Model ID and per-Run token/cost ceiling are engine_service config values.
+- Secrets: `GEMINI_API_KEY` + service secret exist only in Cloud Run env; Clerk keys in Vercel + Convex env. Never in the repo or frontend bundle. Model ID and per-Run token/cost ceiling are engine_service config values.
 - Environments: local (`convex dev` + uvicorn), Vercel preview + Convex preview + shared dev engine, prod.
 
 ### Critical Don't-Miss Rules (anti-patterns)
@@ -83,6 +86,7 @@ _This file contains critical rules and patterns that AI agents must follow when 
 - ❌ Writing to `auditLogs` from anywhere but `appendAuditEntry`; updating or deleting an audit row.
 - ❌ I/O, env reads, logging, or `datetime.now()` inside `reserving_engine`.
 - ❌ The agent emitting literal numbers instead of `{{rs:...}}`/`{{dx:...}}` placeholders, or a new agent tool that isn't a read-only view.
+- ❌ Calling the Gemini API without Agno/`google-genai` (thought-signature handling breaks), or persisting durable state in Agno sessions.
 - ❌ Duplicating role or run-status state outside its single source of truth (Clerk JWT / the `runs` record).
 - ❌ Calling `engine_service` from the browser, or engine_service calling Convex/Clerk.
 - ❌ Polling in application code — live status comes from Convex subscriptions (FR-20).
