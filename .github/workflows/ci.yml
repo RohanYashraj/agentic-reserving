@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# linux/amd64 (ubuntu-latest) is the pinned platform golden tests will
+# assert exact equality on (AD-11). Do not add other OS matrix legs.
+jobs:
+  python:
+    name: Python (engine)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: engine
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Sync dependencies (locked)
+        run: uv sync --locked
+      - name: Run pytest
+        run: uv run pytest
+
+  node:
+    name: Node (app + convex)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Run Vitest
+        run: npm test
