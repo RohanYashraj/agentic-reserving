@@ -1,16 +1,9 @@
 import { OrganizationSwitcher, UserButton } from "@clerk/nextjs";
 import { auth } from "@clerk/nextjs/server";
-import Link from "next/link";
 import { redirect } from "next/navigation";
 import { ReactNode } from "react";
 
-// Sidebar entries per UX-DR17. Plain Tailwind only — shadcn/brand tokens
-// land in Story 1.3.
-const navItems = [
-  { href: "/dashboard", label: "Dashboard" },
-  { href: "/triangles", label: "Triangles" },
-  { href: "/audit-log", label: "Audit Log" },
-];
+import { SidebarNav } from "@/components/SidebarNav";
 
 export default async function AppLayout({
   children,
@@ -28,7 +21,7 @@ export default async function AppLayout({
     return (
       <main className="flex min-h-screen flex-col items-center justify-center gap-4">
         <h1 className="text-lg font-semibold">Select a Workspace</h1>
-        <p className="text-sm text-gray-600">
+        <p className="text-sm text-muted-foreground">
           Choose a Workspace to continue, or sign out from the avatar menu.
         </p>
         <OrganizationSwitcher hidePersonal />
@@ -39,24 +32,14 @@ export default async function AppLayout({
 
   return (
     <div className="flex min-h-screen">
-      <aside className="flex w-56 flex-col border-r border-gray-200">
+      <aside className="flex w-56 flex-col border-r border-border">
         <div className="px-4 py-4 text-sm font-semibold">
           Reserving Copilot
         </div>
-        <nav className="flex flex-col gap-1 px-2">
-          {navItems.map((item) => (
-            <Link
-              key={item.href}
-              href={item.href}
-              className="rounded px-2 py-1.5 text-sm hover:bg-gray-100"
-            >
-              {item.label}
-            </Link>
-          ))}
-        </nav>
+        <SidebarNav />
       </aside>
       <div className="flex flex-1 flex-col">
-        <header className="flex items-center justify-between border-b border-gray-200 px-6 py-3">
+        <header className="flex items-center justify-between border-b border-border px-6 py-3">
           <OrganizationSwitcher hidePersonal />
           <UserButton />
         </header>
