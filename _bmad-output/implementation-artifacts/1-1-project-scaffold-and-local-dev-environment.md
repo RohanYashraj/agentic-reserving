@@ -4,7 +4,7 @@ baseline_commit: 4d9f288d8df54e4b8ca3bb1730ae1c1e4bdd75d3
 
 # Story 1.1: Project Scaffold and Local Dev Environment
 
-Status: review
+Status: done
 
 ## Story
 
@@ -191,4 +191,5 @@ claude-fable-5 (Claude Code)
 
 ## Change Log
 
+- 2026-07-16: Code review passed — 11 patches applied (commit 4e4380b), 4 deferred to owning stories; CI proven green on PR #1 (Python 13s, Node 28s). Status → done.
 - 2026-07-16: Story 1.1 implemented — three-plane scaffold (Next.js 16.2.10 root, Convex + workflow 0.3.10, engine/ uv project with pinned chainladder/FastAPI/agno), CI workflow, secrets hygiene, README. All ACs verified locally; status → review.

@@ -49,7 +49,7 @@ story_location: /Users/rohanyashraj/Documents/GitHub/agentic-reserving/_bmad-out
 
 development_status:
   epic-1: in-progress
-  1-1-project-scaffold-and-local-dev-environment: review
+  1-1-project-scaffold-and-local-dev-environment: done
   1-2-clerk-sign-in-and-protected-app-shell: backlog
   1-3-brand-layer-design-tokens-and-status-badge: backlog
   1-4-workspace-scoping-and-role-guards: backlog
