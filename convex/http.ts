@@ -17,10 +17,10 @@ http.route({
   handler: httpAction(async (ctx, request) => {
     const secret = process.env.CLERK_WEBHOOK_SIGNING_SECRET;
     if (secret === undefined || secret === "") {
-      // Deployment misconfiguration, not a bad request: fail fast and loud.
-      return new Response("CLERK_WEBHOOK_SIGNING_SECRET is not set", {
-        status: 500,
-      });
+      // Deployment misconfiguration, not a bad request: fail fast and loud —
+      // but log the specifics server-side only, never in the response body.
+      console.error("clerk-users-webhook: CLERK_WEBHOOK_SIGNING_SECRET is not set");
+      return new Response("Internal error", { status: 500 });
     }
 
     const svixId = request.headers.get("svix-id");
@@ -36,9 +36,10 @@ http.route({
     try {
       webhook = new Webhook(secret);
     } catch {
-      return new Response("CLERK_WEBHOOK_SIGNING_SECRET is malformed", {
-        status: 500,
-      });
+      console.error(
+        "clerk-users-webhook: CLERK_WEBHOOK_SIGNING_SECRET is malformed",
+      );
+      return new Response("Internal error", { status: 500 });
     }
 
     const body = await request.text();

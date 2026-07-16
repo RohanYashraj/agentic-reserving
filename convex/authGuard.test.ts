@@ -38,9 +38,11 @@ const publicFunctionArgs: Record<string, Record<string, unknown>> = {
   // "module:functionName": { ...minimally valid args }
 };
 
+type Harness = TestConvex<SchemaDefinition<GenericSchema, boolean>>;
+
 type PublicFunction = {
   path: string;
-  kind: "query" | "mutation" | "action";
+  call: (t: Harness, args: Record<string, unknown>) => Promise<unknown>;
 };
 
 function collectPublicFunctions(
@@ -63,19 +65,30 @@ function collectPublicFunctions(
           isMutation?: boolean;
           isAction?: boolean;
         };
-        const kind = fn.isQuery
-          ? "query"
-          : fn.isMutation
-            ? "mutation"
-            : fn.isAction
-              ? "action"
-              : null;
-        if (kind === null) {
+        const path = `${modulePath}:${exportName}`;
+        if (fn.isQuery) {
+          found.push({
+            path,
+            call: (t, args) =>
+              t.query(makeFunctionReference<"query">(path), args),
+          });
+        } else if (fn.isMutation) {
+          found.push({
+            path,
+            call: (t, args) =>
+              t.mutation(makeFunctionReference<"mutation">(path), args),
+          });
+        } else if (fn.isAction) {
+          found.push({
+            path,
+            call: (t, args) =>
+              t.action(makeFunctionReference<"action">(path), args),
+          });
+        } else {
           throw new Error(
-            `${modulePath}:${exportName} is public but neither query, mutation, nor action — extend the enumeration`,
+            `${path} is public but neither query, mutation, nor action — extend the enumeration`,
           );
         }
-        found.push({ path: `${modulePath}:${exportName}`, kind });
       }
     }
   }
@@ -83,16 +96,11 @@ function collectPublicFunctions(
 }
 
 async function assertRejectsUnauthenticated(
-  t: TestConvex<SchemaDefinition<GenericSchema, boolean>>,
+  t: Harness,
   fn: PublicFunction,
   args: Record<string, unknown>,
 ) {
-  const call =
-    fn.kind === "query"
-      ? t.query(makeFunctionReference<"query">(fn.path), args)
-      : fn.kind === "mutation"
-        ? t.mutation(makeFunctionReference<"mutation">(fn.path), args)
-        : t.action(makeFunctionReference<"action">(fn.path), args);
+  const call = fn.call(t, args);
   let caught: unknown;
   try {
     await call;
@@ -152,10 +160,10 @@ describe("auth-guard enumeration (NFR-3)", () => {
 
     test("enumeration finds the fixture public functions", () => {
       const found = collectPublicFunctions(fixtureModulesEager);
-      expect(found).toEqual([
-        { path: "fixtures:approveScoped", kind: "mutation" },
-        { path: "fixtures:readScoped", kind: "query" },
-        { path: "fixtures:writeScoped", kind: "mutation" },
+      expect(found.map((fn) => fn.path)).toEqual([
+        "fixtures:approveScoped",
+        "fixtures:readScoped",
+        "fixtures:writeScoped",
       ]);
     });
 
