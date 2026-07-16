@@ -86,6 +86,14 @@ SSO-ready by design: enabling SAML/OIDC for an enterprise customer is a Clerk da
 
 The `auditLogs` table is append-only and per-Workspace hash-chained: exactly one internal mutation — `appendAuditEntry` in `convex/auditLogs.ts` — writes rows, and no code path updates or deletes them (enforced by `tests/audit-append-only.test.ts` plus review). Each entry's `hash = sha256(canonicalJSON(entry) + prevHash)` (lowercase hex; the first entry of a Workspace chains from the empty string); the canonicalization contract lives in `convex/lib/auditChain.ts` and is frozen by a pinned known-answer test vector. The public query `auditLogs.verifyChain` re-walks a Workspace's chain and reports the first broken link. Clerk membership webhook events are persisted through this chain, with the `svix-id` as an idempotency key so redeliveries never duplicate entries.
 
+### Reserving engine (Story 2.1, AD-2)
+
+`engine/reserving_engine/` is the pure functional core: plain data in, typed JSON-serialisable Pydantic models out — no file, network, environment, clock, or logging side effects. Purity and the downward-only layering (`engine_service`/`copilot_agent` → `reserving_engine`, never the reverse) are enforced mechanically by import-linter contracts in `engine/pyproject.toml`. `validate_triangle` returns cell-level `{origin, dev, reason}` findings (shape, paid-only monotonicity per PRD OQ-6, missing cells) — never a generic failure. `triangle_hash` — sha256 of the canonical Triangle JSON, frozen by a pinned known-answer test — is *the* Triangle hash for Lineage; it is distinct from the raw-file sha256 (upload dedupe, Epic 3) and the audit-chain hash (`convex/lib/auditChain.ts`), which never share helpers. Lint locally with:
+
+```bash
+cd engine && uv run ruff check . && uv run lint-imports
+```
+
 ### Run
 
 ```bash

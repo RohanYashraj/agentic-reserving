@@ -16,8 +16,49 @@ dependencies = [
 [dependency-groups]
 dev = [
     "hypothesis>=6.156.6",
+    "import-linter>=2.13",
     "pytest>=9.1.1",
+    "ruff>=0.15.22",
 ]
 
 [tool.uv]
 package = false
+
+[tool.ruff]
+line-length = 100
+
+# AD-2: reserving_engine is the pure functional core — no file, network,
+# environment, clock, or logging side effects — and the dependency
+# direction is strictly downward (engine_service / copilot_agent may
+# import reserving_engine, never the reverse). These contracts make the
+# purity rule mechanical rather than aspirational.
+[tool.importlinter]
+root_packages = ["reserving_engine", "engine_service", "copilot_agent"]
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "Downward-only layering: shells import the core, never the reverse"
+type = "layers"
+layers = ["engine_service | copilot_agent", "reserving_engine"]
+
+[[tool.importlinter.contracts]]
+name = "reserving_engine purity (AD-2): no I/O-capable modules"
+type = "forbidden"
+source_modules = ["reserving_engine"]
+forbidden_modules = [
+    "os",
+    "io",
+    "pathlib",
+    "sys",
+    "socket",
+    "http",
+    "urllib",
+    "requests",
+    "httpx",
+    "logging",
+    "datetime",
+    "time",
+    "random",
+    "subprocess",
+    "tempfile",
+]

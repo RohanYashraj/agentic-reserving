@@ -5,7 +5,7 @@
 - ~~Geist fonts are loaded in `app/layout.tsx` but `app/globals.css` body falls back to Arial — dead font pipeline. Resolve in Story 1.3 (brand layer owns typography).~~ **Resolved in Story 1.3** — body now inherits `font-sans` (Geist) via the shadcn base layer; verified by computed-style probe.
 - Python package imports resolve only when pytest runs from `engine/` cwd (`package = false`, no install). CI and README both use that cwd; revisit only if IDE test runners bite.
 - Root `tsconfig.json` includes `convex/**` in the Next.js (DOM-lib) type program. Consider a `convex/tsconfig.json` when the first Convex functions land (Story 1.4).
-- No Python lint/format tooling (ruff/mypy) in `engine/` dev deps or CI. Add when engine code exists (Epic 2), where correctness matters most.
+- ~~No Python lint/format tooling (ruff/mypy) in `engine/` dev deps or CI. Add when engine code exists (Epic 2), where correctness matters most.~~ **Resolved in Story 2.1** — `ruff` + `import-linter` added to the dev group with AD-2 purity/layering contracts in `engine/pyproject.toml`; both run in the CI python job.
 
 ## Deferred from: code review of 1-2-clerk-sign-in-and-protected-app-shell (2026-07-16)
 
