@@ -94,6 +94,8 @@ The `auditLogs` table is append-only and per-Workspace hash-chained: exactly one
 cd engine && uv run ruff check . && uv run lint-imports
 ```
 
+`run_methods` (Story 2.2) is the engine's single computation entry point: it validates the Triangle at the boundary, runs Chain Ladder via chainladder 0.9.2, and returns a `ResultSet` — camelCase-on-the-wire Pydantic contract (AD-10) carrying LDFs, ultimates, and IBNR per Origin Period plus a `Lineage` (engine semver, chainladder version, canonical Triangle hash, all parameters) sufficient to reproduce the run (AD-11). Correctness is gated by Taylor-Ashe golden tests: exact equality on the pinned CI platform (linux/amd64), 1e-8 relative tolerance cross-platform, cross-checked against published Mack (1993) values, with a re-derivation test that replays a stored Lineage.
+
 ### Run
 
 ```bash

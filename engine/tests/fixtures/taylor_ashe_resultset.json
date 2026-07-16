@@ -1,0 +1,117 @@
+{
+  "schemaVersion": "1.0.0",
+  "lineage": {
+    "engineVersion": "0.1.0",
+    "chainladderVersion": "0.9.2",
+    "triangleHash": "89d944078c9882f9fab501472e25e9e4534b427be81dddbffe85f8f878bdb44f",
+    "parameters": {
+      "methods": [
+        "chain_ladder"
+      ]
+    }
+  },
+  "methodResults": [
+    {
+      "method": "chain_ladder",
+      "developmentFactors": [
+        {
+          "fromDev": "12",
+          "toDev": "24",
+          "factor": 3.4906065479322863
+        },
+        {
+          "fromDev": "24",
+          "toDev": "36",
+          "factor": 1.7473326421004893
+        },
+        {
+          "fromDev": "36",
+          "toDev": "48",
+          "factor": 1.4574128360182361
+        },
+        {
+          "fromDev": "48",
+          "toDev": "60",
+          "factor": 1.1738517093997867
+        },
+        {
+          "fromDev": "60",
+          "toDev": "72",
+          "factor": 1.103823532244344
+        },
+        {
+          "fromDev": "72",
+          "toDev": "84",
+          "factor": 1.0862693644363943
+        },
+        {
+          "fromDev": "84",
+          "toDev": "96",
+          "factor": 1.0538743555048127
+        },
+        {
+          "fromDev": "96",
+          "toDev": "108",
+          "factor": 1.0765551783529383
+        },
+        {
+          "fromDev": "108",
+          "toDev": "120",
+          "factor": 1.017724725219544
+        }
+      ],
+      "originResults": [
+        {
+          "origin": "2001",
+          "ultimate": 3901463.0,
+          "ibnr": 0.0
+        },
+        {
+          "origin": "2002",
+          "ultimate": 5433718.8145487895,
+          "ibnr": 94633.81454878952
+        },
+        {
+          "origin": "2003",
+          "ultimate": 5378826.290064239,
+          "ibnr": 469511.29006423894
+        },
+        {
+          "origin": "2004",
+          "ultimate": 5297905.820825462,
+          "ibnr": 709637.8208254622
+        },
+        {
+          "origin": "2005",
+          "ultimate": 4858199.639049739,
+          "ibnr": 984888.6390497386
+        },
+        {
+          "origin": "2006",
+          "ultimate": 5111171.457661663,
+          "ibnr": 1419459.4576616632
+        },
+        {
+          "origin": "2007",
+          "ultimate": 5660770.620135548,
+          "ibnr": 2177640.6201355476
+        },
+        {
+          "origin": "2008",
+          "ultimate": 6784799.0119525,
+          "ibnr": 3920301.0119525
+        },
+        {
+          "origin": "2009",
+          "ultimate": 5642266.263261643,
+          "ibnr": 4278972.263261643
+        },
+        {
+          "origin": "2010",
+          "ultimate": 4969824.694424728,
+          "ibnr": 4625810.694424728
+        }
+      ]
+    }
+  ]
+}

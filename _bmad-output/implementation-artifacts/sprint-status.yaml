@@ -58,7 +58,7 @@ development_status:
 
   epic-2: in-progress
   2-1-triangle-model-and-validation-core: review
-  2-2-chain-ladder-with-resultset-lineage-and-golden-test: backlog
+  2-2-chain-ladder-with-resultset-lineage-and-golden-test: review
   2-3-bornhuetter-ferguson-and-mack-methods: backlog
   2-4-diagnostics-computation-with-diagnostic-ids: backlog
   2-5-engine-service-fastapi-shell-with-service-auth: backlog
