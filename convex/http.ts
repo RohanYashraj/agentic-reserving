@@ -2,13 +2,18 @@ import { httpRouter } from "convex/server";
 import { Webhook } from "svix";
 import { internal } from "./_generated/api";
 import { httpAction } from "./_generated/server";
-import { mapMembershipEvent } from "./lib/clerkWebhook";
+import {
+  MEMBERSHIP_EVENT_TYPES,
+  mapMembershipEvent,
+} from "./lib/clerkWebhook";
 
 const http = httpRouter();
 
 // Clerk → Convex webhook (Svix-signed). Captures organizationMembership.*
 // changes — the only server-side point that observes dashboard-driven role
-// changes (FR-19) — and emits them through internal.audit.recordEvent.
+// changes (FR-19) — and persists them through the AD-6 single writer,
+// internal.auditLogs.appendAuditEntry (svix-id as dedupeId, so Svix's
+// at-least-once redelivery never duplicates a chain entry).
 // Configure in the Clerk dashboard against this deployment's .convex.site
 // URL; the signing secret lives only in the Convex deployment env.
 http.route({
@@ -56,10 +61,27 @@ http.route({
 
     const auditable = mapMembershipEvent(event);
     if (auditable === null) {
+      // Object.hasOwn, not `in`: `in` walks the prototype chain, so a signed
+      // event with type "toString"/"constructor" would masquerade as
+      // recognized and 500-loop forever.
+      if (Object.hasOwn(MEMBERSHIP_EVENT_TYPES, event.type)) {
+        // A membership event we recognize but cannot attribute to a
+        // Workspace must fail loud (500 → Svix retries), never vanish
+        // behind a silent 200 — audit completeness outranks endpoint
+        // politeness (NFR-5; Story 1.5 decision, changed from 1.4,
+        // upheld at code review 2026-07-16).
+        console.error(
+          `clerk-users-webhook: recognized event ${event.type} is unattributable (missing or invalid data / organization.id)`,
+        );
+        return new Response("Internal error", { status: 500 });
+      }
       return Response.json({ recorded: null }, { status: 200 });
     }
 
-    await ctx.runMutation(internal.audit.recordEvent, auditable);
+    await ctx.runMutation(internal.auditLogs.appendAuditEntry, {
+      ...auditable,
+      dedupeId: svixId,
+    });
     return Response.json(
       {
         recorded: auditable.eventType,

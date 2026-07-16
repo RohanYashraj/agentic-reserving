@@ -82,6 +82,10 @@ Authentication is Clerk-hosted (Story 1.2); accounts, Workspaces (Clerk organiza
 
 SSO-ready by design: enabling SAML/OIDC for an enterprise customer is a Clerk dashboard configuration change (per-connection); `<SignIn />` renders enabled strategies automatically — no code change.
 
+### Audit Log (Story 1.5, AD-6)
+
+The `auditLogs` table is append-only and per-Workspace hash-chained: exactly one internal mutation — `appendAuditEntry` in `convex/auditLogs.ts` — writes rows, and no code path updates or deletes them (enforced by `tests/audit-append-only.test.ts` plus review). Each entry's `hash = sha256(canonicalJSON(entry) + prevHash)` (lowercase hex; the first entry of a Workspace chains from the empty string); the canonicalization contract lives in `convex/lib/auditChain.ts` and is frozen by a pinned known-answer test vector. The public query `auditLogs.verifyChain` re-walks a Workspace's chain and reports the first broken link. Clerk membership webhook events are persisted through this chain, with the `svix-id` as an idempotency key so redeliveries never duplicate entries.
+
 ### Run
 
 ```bash

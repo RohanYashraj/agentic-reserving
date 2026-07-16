@@ -36,6 +36,7 @@ const realModulesEager: Record<string, Record<string, unknown>> =
  */
 const publicFunctionArgs: Record<string, Record<string, unknown>> = {
   // "module:functionName": { ...minimally valid args }
+  "auditLogs:verifyChain": { workspaceId: "org_test" },
 };
 
 type Harness = TestConvex<SchemaDefinition<GenericSchema, boolean>>;
