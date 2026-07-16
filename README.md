@@ -42,6 +42,25 @@ npx convex deployment create local   # once, if developing without an account
 
 Convex writes its connection info to `.env.local` (gitignored).
 
+### Clerk (one-time init)
+
+Authentication is Clerk-hosted (Story 1.2); accounts, Workspaces (Clerk organizations), and roles are managed in the Clerk dashboard — there is no in-app admin UI or public sign-up.
+
+1. Create a Clerk application; copy `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` and `CLERK_SECRET_KEY` into `.env.local` (see `.env.example` for all names).
+2. Disable public sign-ups (Clerk dashboard → Restrictions) — users are invited via the dashboard only.
+3. Enable **Organizations** with membership required. Create org roles `analyst` and `senior_actuary` (consumed by role guards from Story 1.4) and a test organization with at least one member.
+4. Create a JWT template named exactly `convex` from Clerk's Convex preset.
+5. Point Convex at the Clerk issuer (a Convex deployment env var, not `.env.local`):
+
+   ```bash
+   npx convex env set CLERK_JWT_ISSUER_DOMAIN https://<your-app>.clerk.accounts.dev
+   npx convex env get CLERK_JWT_ISSUER_DOMAIN   # verify before deploying
+   ```
+
+6. Run `npx convex dev` once so `convex/auth.config.ts` deploys (it fails fast with a clear error if the issuer env var is missing).
+
+SSO-ready by design: enabling SAML/OIDC for an enterprise customer is a Clerk dashboard configuration change (per-connection); `<SignIn />` renders enabled strategies automatically — no code change.
+
 ### Run
 
 ```bash

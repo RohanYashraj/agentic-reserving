@@ -10,6 +10,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@clerk/nextjs": "^7.5.19",
     "@convex-dev/workflow": "0.3.10",
     "convex": "^1.42.2",
     "next": "16.2.x",
