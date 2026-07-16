@@ -1,5 +1,5 @@
 ---
-stepsCompleted: [1, 2, 3, 4]
+stepsCompleted: [1, 2, 3, 4, 5, 6]
 inputDocuments: []
 workflowType: 'research'
 lastStep: 1
@@ -22,7 +22,11 @@ source_verification: true
 
 ## Research Overview
 
-[Research overview and methodology will be appended here]
+This report validates the full technical stack for an agentic insurance reserving application: a deterministic Python `chainladder` calculation engine (Chain Ladder, Bornhuetter-Ferguson, Mack) exposed via FastAPI, a Next.js App Router frontend authenticated by Clerk, Convex as the reactive backend and system of record, the **Agno** framework as the mandated agent orchestration layer, and Google's `gemini-3.1-flash-lite` as the interpretation model. All claims were verified against current public sources (July 2026) across 14 web searches; confidence levels are flagged where evidence is thinner.
+
+The headline finding: the stack coheres with no architectural contradictions, every integration seam has an officially documented path, and the regulated-workflow requirements (NAIC AI Model Bulletin direction, provenance-checked LLM output, immutable audit logging) map onto concrete, buildable patterns. Three implementation traps were identified in advance: Gemini 3.x thought-signature handling in tool loops, idempotency of retried engine calls, and the risk of dual audit sources between Agno sessions and Convex.
+
+See the **Research Synthesis** section at the end of this document for the executive summary, key findings, and strategic recommendations.
 
 ---
 
@@ -349,3 +353,71 @@ _Source: https://ai.google.dev/gemini-api/docs/rate-limits, https://ai.google.de
 - Audit log passes append-only/hash-chain verification continuously
 
 _Source: synthesis of all cited sources above_
+
+---
+
+# Research Synthesis: Agentic Insurance Reserving — Validated Stack, Deterministic Core, Narrative Shell
+
+## Executive Summary
+
+The proposed stack is **validated end-to-end with no architectural contradictions**. Every seam has an officially documented integration path: Clerk mints Convex-validated JWTs with a canonical App Router provider nesting; Convex's `workflow`/`workpool` components provide durable, retry-safe orchestration of the FastAPI chainladder engine with reactive job status for free; and the Agno framework — whose AgentOS runtime is itself a FastAPI app — cohabits with the engine in a single Cloud Run service, calling `gemini-3.1-flash-lite` through its model-agnostic layer.
+
+The defining design commitment is the **deterministic core with a narrative shell**: chainladder computes every number; the Agno agent holds only read-only, Pydantic-typed tools; structured output forces a `numbersUsed[]` provenance field that is programmatically verified before display; and an append-only, hash-chained Convex `auditLog` plus deterministic lineage (engine version, triangle hash, method parameters) aligns with the NAIC AI Model Bulletin now adopted in 25+ states and D.C. This matches the 2026 enterprise consensus that regulated processes belong in deterministic execution with agents as thin interpretive layers.
+
+Three traps were identified before any code exists: (1) Gemini 3.x **thought signatures** must be echoed back in function-calling loops or requests fail with 400s — mitigated by using the official `google-genai` SDK under Agno; (2) retried engine calls must be **idempotent by job ID** or reserving jobs double-compute; (3) Agno's own session store must remain transient state only, with **Convex as the sole audit source of record** (decision to be ratified as an ADR in the architecture phase).
+
+**Key Technical Findings:**
+
+- Three-plane architecture: TypeScript product plane (Next.js/Clerk/Convex), Python computation+agent plane (chainladder + FastAPI + Agno, one container), Gemini model plane behind Agno's abstraction
+- `gemini-3.1-flash-lite` verified GA: $0.25/$1.50 per 1M tokens, 1M context, function calling + JSON Schema structured output; Batch API halves costs; context caching cuts cached input ~90%
+- Convex components (`workpool`, `workflow`) eliminate hand-rolled job orchestration; reactive queries eliminate status polling
+- Agno independently validated as production-current (v2.5.x, 39k+ stars) with native HITL primitives (`Agent.continue_run()`) fitting the actuary-review gate
+- Regulatory direction (NAIC bulletin, EU AI Act high-risk classification for insurance pricing) demands immutable, timestamped, context-rich audit trails — achievable with the append-only hash-chained pattern
+
+**Technical Recommendations:**
+
+1. Build engine-first with golden-triangle regression tests (published CL/BF/Mack results) as the compliance anchor
+2. Keep the Gemini model ID configurable; drive upgrade decisions from Agno's eval framework in CI, not benchmarks
+3. Design for async 202-plus-signed-callback orchestration even if v1 awaits synchronously
+4. Gate every interpretation that could feed a filed reserve behind human actuary review, and log the review decision
+5. Ratify "Convex is the sole audit record" as an explicit ADR before the agent layer is built
+
+## Table of Contents
+
+1. Technical Research Scope Confirmation
+2. Technology Stack Analysis — languages, frameworks, Gemini layer, storage, cloud, adoption trends
+3. Integration Patterns Analysis — Seam 1: Clerk+Convex+Next.js auth; Seam 2: Convex↔FastAPI orchestration; Seam 3: Gemini interpretation layer; protocol summary
+4. Architectural Patterns and Design — three-plane architecture, Agno assessment, design principles, scalability, security, data, deployment
+5. Implementation Approaches and Technology Adoption — sequencing, workflows, testing, operations, cost, risk register
+6. Technical Research Recommendations — roadmap, final stack table, skills, KPIs
+7. Research Synthesis (this section)
+
+## Research Goals: Achievement Assessment
+
+**Goal 1 — Clerk + Convex + Next.js integration pattern:** ✅ Fully resolved with the canonical pattern from official docs on both vendor sides (JWT template → `auth.config.ts` → provider nesting → `ctx.auth`/`useConvexAuth()`), including the user-sync webhook pattern. Confidence: high.
+
+**Goal 2 — Convex orchestration of a long-running Python service:** ✅ Fully resolved: job-record-first design, `workflow`/`workpool` durable execution with scheduler-based backoff, reactive status, signed HTTP-action callbacks, idempotency-by-job-ID. Confidence: high.
+
+**Goal 3 — LLM interpretation layer with audit logging:** ✅ Resolved on mechanics (function-calling firewall, structured output, provenance verification, HITL gate, append-only audit log — all buildable with Agno + Gemini primitives). Confidence: high on mechanics, medium on regulatory sufficiency — the compliance posture should be reviewed by counsel/appointed actuary.
+
+**Bonus discoveries beyond the original goals:** Agno's AgentOS-as-FastAPI convergence with the engine service; Gemini thought-signature requirement; Batch API economics for bulk re-interpretation; the NAIC bulletin's 25-state adoption footprint.
+
+## Research Methodology and Source Verification
+
+- **Method:** staged workflow (scope → stack → integration → architecture → implementation → synthesis), each stage grounded in parallel web searches executed 2026-07-16; findings written immediately with per-section citations.
+- **Coverage:** 14 web searches, ~40 distinct cited sources — official vendor documentation prioritized (Google AI, Convex, Clerk, Agno, Google Cloud), supplemented by the CAS E-Forum practitioners' guide, Convex Stack engineering articles, and 2026 agentic-architecture surveys.
+- **Confidence framework:** all load-bearing claims rest on official docs (high confidence); flagged medium-confidence items: flash-lite's capability ceiling for nuanced actuarial narrative, regulatory sufficiency of the proposed audit posture, and the Agno-sessions-vs-Convex ADR.
+- **Limitations:** no hands-on benchmarking was performed; chainladder runtime characteristics on very large triangle sets and real Gemini latency under load should be validated empirically in Phase 1–2.
+
+## Conclusion and Next Steps
+
+The stack is coherent, current, and buildable, with the regulated-workflow constraints translated into concrete patterns rather than aspirations. The recommended next moves in the BMad flow: capture the product intent in a **product brief** (`bmad-product-brief`), then a **PRD** (`bmad-prd`), carrying this document forward as planning input — the architecture phase (`bmad-architecture`) should ratify the three-plane design and the flagged ADRs.
+
+---
+
+**Technical Research Completion Date:** 2026-07-16
+**Research Period:** current comprehensive technical analysis (all sources verified 2026-07-16)
+**Source Verification:** all technical facts cited with current sources inline
+**Technical Confidence Level:** High — official documentation for all load-bearing claims; medium-confidence items explicitly flagged
+
+_This document serves as an authoritative technical reference for the agentic-reserving project and as planning input to the product brief, PRD, and architecture phases._
