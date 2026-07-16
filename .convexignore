@@ -1,0 +1,2 @@
+# Test files live alongside functions but must never deploy.
+**/*.test.ts

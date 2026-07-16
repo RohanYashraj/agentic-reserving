@@ -49,7 +49,16 @@ Authentication is Clerk-hosted (Story 1.2); accounts, Workspaces (Clerk organiza
 1. Create a Clerk application; copy `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` and `CLERK_SECRET_KEY` into `.env.local` (see `.env.example` for all names).
 2. Disable public sign-ups (Clerk dashboard → Restrictions) — users are invited via the dashboard only.
 3. Enable **Organizations** with membership required. Create org roles `analyst` and `senior_actuary` (consumed by role guards from Story 1.4) and a test organization with at least one member.
-4. Create a JWT template named exactly `convex` from Clerk's Convex preset.
+4. Create a JWT template named exactly `convex` from Clerk's Convex preset, then add two custom claims (Story 1.4 — the preset does not include them, and the role guards read them from `ctx.auth.getUserIdentity()`):
+
+   ```json
+   {
+     "org_id": "{{org.id}}",
+     "org_role": "{{org.role}}"
+   }
+   ```
+
+   `{{org.role}}` emits the prefixed role key (e.g. `org:analyst`); `convex/lib/guards.ts` normalizes it to the bare slug. The roles `analyst` and `senior_actuary` from step 3 must exist or every guarded call is FORBIDDEN.
 5. Point Convex at the Clerk issuer (a Convex deployment env var, not `.env.local`):
 
    ```bash
@@ -58,6 +67,18 @@ Authentication is Clerk-hosted (Story 1.2); accounts, Workspaces (Clerk organiza
    ```
 
 6. Run `npx convex dev` once so `convex/auth.config.ts` deploys (it fails fast with a clear error if the issuer env var is missing).
+
+7. Clerk webhook → Convex (Story 1.4, role/membership audit events):
+
+   1. In the Clerk dashboard (Configure → Webhooks) add an endpoint pointing at the Convex deployment's **HTTP Actions** URL — the `.convex.site` domain, not `.convex.cloud`, and region-qualified exactly like the deployment's cloud URL (check `npx convex dashboard` or `.env.local`): e.g. `https://<deployment>.eu-west-1.convex.site/clerk-users-webhook`. The unqualified `<deployment>.convex.site` form 404s on regional deployments.
+   2. Subscribe it to `organizationMembership.created`, `organizationMembership.updated`, and `organizationMembership.deleted`.
+   3. Copy the endpoint's signing secret (`whsec_…`) into the Convex deployment env — never into the repo or any `.env` file:
+
+      ```bash
+      npx convex env set CLERK_WEBHOOK_SIGNING_SECRET whsec_...
+      ```
+
+   Dashboard-driven role changes reach the cloud dev deployment directly — no tunnel needed for local development.
 
 SSO-ready by design: enabling SAML/OIDC for an enterprise customer is a Clerk dashboard configuration change (per-connection); `<SignIn />` renders enabled strategies automatically — no code change.
 

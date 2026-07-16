@@ -1,0 +1,21 @@
+{
+  // Convex functions run in an isolate, not the browser: no DOM libs here.
+  // process/fetch globals are typed via the auto-included @types/node.
+  // This program is type-checked in CI separately from the Next.js (DOM-lib)
+  // root program, which excludes convex/**.
+  "compilerOptions": {
+    "target": "ESNext",
+    "lib": ["ESNext"],
+    "allowJs": true,
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "allowSyntheticDefaultImports": true
+  },
+  "include": ["./**/*.ts"],
+  "exclude": []
+}

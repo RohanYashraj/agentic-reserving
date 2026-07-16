@@ -1,12 +1,11 @@
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vitest/config";
 
-// convex-test (used from Story 1.4 onward) needs an edge-runtime test
-// environment for convex/** specs; add a vitest project for that when the
-// first Convex function test lands.
-//
-// Component specs opt into jsdom per file via `// @vitest-environment jsdom`;
-// everything else stays in the default node environment.
+// Two test projects:
+// - "unit": app/component specs. Component specs opt into jsdom per file via
+//   `// @vitest-environment jsdom`; everything else stays in node.
+// - "convex": convex-test specs, which require the edge-runtime environment
+//   and convex-test inlined so its dynamic module loading works.
 export default defineConfig({
   plugins: [react()],
   resolve: {
@@ -15,6 +14,32 @@ export default defineConfig({
     },
   },
   test: {
-    include: ["tests/**/*.test.{ts,tsx}"],
+    projects: [
+      {
+        extends: true,
+        test: {
+          name: "unit",
+          include: ["tests/**/*.test.{ts,tsx}"],
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: "convex",
+          include: ["convex/**/*.test.ts"],
+          environment: "edge-runtime",
+          // auth.config.ts fail-fasts on this env var at import time; the
+          // enumeration test imports every convex module, so stub it here.
+          env: {
+            CLERK_JWT_ISSUER_DOMAIN: "https://stub.clerk.accounts.dev",
+          },
+          server: {
+            deps: {
+              inline: ["convex-test"],
+            },
+          },
+        },
+      },
+    ],
   },
 });
