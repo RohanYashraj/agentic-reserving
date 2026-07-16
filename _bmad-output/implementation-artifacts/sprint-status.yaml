@@ -51,7 +51,7 @@ development_status:
   epic-1: in-progress
   1-1-project-scaffold-and-local-dev-environment: done
   1-2-clerk-sign-in-and-protected-app-shell: done
-  1-3-brand-layer-design-tokens-and-status-badge: backlog
+  1-3-brand-layer-design-tokens-and-status-badge: done
   1-4-workspace-scoping-and-role-guards: backlog
   1-5-append-only-hash-chained-audit-log-primitive: backlog
   epic-1-retrospective: optional
