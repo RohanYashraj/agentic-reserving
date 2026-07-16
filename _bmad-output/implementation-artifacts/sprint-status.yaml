@@ -56,8 +56,8 @@ development_status:
   1-5-append-only-hash-chained-audit-log-primitive: done
   epic-1-retrospective: optional
 
-  epic-2: backlog
-  2-1-triangle-model-and-validation-core: backlog
+  epic-2: in-progress
+  2-1-triangle-model-and-validation-core: review
   2-2-chain-ladder-with-resultset-lineage-and-golden-test: backlog
   2-3-bornhuetter-ferguson-and-mack-methods: backlog
   2-4-diagnostics-computation-with-diagnostic-ids: backlog
