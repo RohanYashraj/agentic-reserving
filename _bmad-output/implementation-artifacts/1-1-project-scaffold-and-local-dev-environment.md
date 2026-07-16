@@ -52,18 +52,18 @@ so that every subsequent story starts from a working, correctly-shaped codebase.
 
 ### Review Findings
 
-- [ ] [Review][Decision] AC-4 unproven: Tasks 3.6 + 6.1 checked but nothing is committed — `uv.lock` isn't committed and CI has never executed. Resolve by committing + pushing to trigger the pipeline, or unchecking the subtasks pending your own commit.
-- [ ] [Review][Patch] CI Node job runs tests only — add `npm run lint` + `tsc --noEmit` steps [.github/workflows/ci.yml:48-60]
-- [ ] [Review][Patch] Scaffold test asserts schema is empty — guaranteed red when Story 1.4 adds tables; relax assertion [tests/scaffold.test.ts:7]
-- [ ] [Review][Patch] CI never runs on non-main-target PRs; no manual trigger — unfilter `pull_request`, add `workflow_dispatch` [.github/workflows/ci.yml:25-29]
-- [ ] [Review][Patch] Workflow hygiene: no `permissions:` block; setup-uv version unpinned [.github/workflows/ci.yml:41-42]
-- [ ] [Review][Patch] `GEMINI_MODEL_ID` carries a value in a names-only file [engine/.env.example:6]
-- [ ] [Review][Patch] Metadata still "Create Next App" [app/layout.tsx:metadata]
-- [ ] [Review][Patch] `@types/node ^20` vs Node 22 in CI/README; no `engines` field [package.json]
-- [ ] [Review][Patch] Root-level `.venv/` not gitignored (only `engine/.venv/`) [.gitignore:38]
-- [ ] [Review][Patch] Vitest include misses `.tsx` specs [vitest.config.mts:8]
-- [ ] [Review][Patch] ESLint ignore over-broad: `engine/**` where `engine/.venv/**` is the actual offender [eslint.config.mjs]
-- [ ] [Review][Patch] `package.json` missing trailing newline [package.json]
+- [x] [Review][Decision] AC-4 unproven: Tasks 3.6 + 6.1 checked but nothing is committed — `uv.lock` isn't committed and CI has never executed. Resolved: scaffold committed (a63c801), patches committed on top, pushed with PR to main to execute CI.
+- [x] [Review][Patch] CI Node job runs tests only — add `npm run lint` + `tsc --noEmit` steps [.github/workflows/ci.yml:48-60]
+- [x] [Review][Patch] Scaffold test asserts schema is empty — guaranteed red when Story 1.4 adds tables; relax assertion [tests/scaffold.test.ts:7]
+- [x] [Review][Patch] CI never runs on non-main-target PRs; no manual trigger — unfilter `pull_request`, add `workflow_dispatch` [.github/workflows/ci.yml:25-29]
+- [x] [Review][Patch] Workflow hygiene: no `permissions:` block; setup-uv version unpinned [.github/workflows/ci.yml:41-42]
+- [x] [Review][Patch] `GEMINI_MODEL_ID` carries a value in a names-only file [engine/.env.example:6]
+- [x] [Review][Patch] Metadata still "Create Next App" [app/layout.tsx:metadata]
+- [x] [Review][Patch] `@types/node ^20` vs Node 22 in CI/README; no `engines` field [package.json]
+- [x] [Review][Patch] Root-level `.venv/` not gitignored (only `engine/.venv/`) [.gitignore:38]
+- [x] [Review][Patch] Vitest include misses `.tsx` specs [vitest.config.mts:8]
+- [x] [Review][Patch] ESLint ignore over-broad: `engine/**` where `engine/.venv/**` is the actual offender [eslint.config.mjs]
+- [x] [Review][Patch] `package.json` missing trailing newline [package.json]
 - [x] [Review][Defer] Geist fonts loaded but body uses Arial — Story 1.3 owns globals.css/typography [app/globals.css] — deferred, lands with brand layer
 - [x] [Review][Defer] Python imports resolve only from `engine/` cwd (IDE runners at repo root fail) [engine/pyproject.toml] — deferred, CI/README both use engine/ cwd; revisit if it bites
 - [x] [Review][Defer] Root tsconfig sweeps `convex/**` into the Next.js type program [tsconfig.json] — deferred, revisit when first Convex functions land (Story 1.4)

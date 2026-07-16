@@ -34,8 +34,8 @@ yarn-error.log*
 .env*
 !.env.example
 
-# python (engine/)
-engine/.venv/
+# python
+.venv/
 __pycache__/
 *.pyc
 .pytest_cache/

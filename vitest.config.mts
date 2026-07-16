@@ -5,6 +5,6 @@ import { defineConfig } from "vitest/config";
 // first Convex function test lands.
 export default defineConfig({
   test: {
-    include: ["tests/**/*.test.ts"],
+    include: ["tests/**/*.test.{ts,tsx}"],
   },
 });

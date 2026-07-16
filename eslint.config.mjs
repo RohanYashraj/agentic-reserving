@@ -12,8 +12,9 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
-    // Python plane and generated Convex code are not lint targets.
-    "engine/**",
+    // Python virtualenv (bundles third-party JS) and generated Convex code
+    // are not lint targets.
+    "engine/.venv/**",
     "convex/_generated/**",
   ]),
 ]);
