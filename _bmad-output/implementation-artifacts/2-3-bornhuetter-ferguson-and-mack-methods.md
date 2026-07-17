@@ -73,7 +73,7 @@ so that all three v1 Methods are available from one engine call. (FR-5, NFR-1)
   - [x] 7.2 README engine subsection: one short paragraph — all three v1 Methods from one `run_methods` call, BF a prioris (loss ratio × exposure, engine-side per AD-1), Mack SEs matching Mack (1993) via `sigma_interpolation="mack"`.
 - [x] Task 8: Verification (all ACs)
   - [x] 8.1 Full battery from `engine/` cwd: `uv run pytest` (2.2's 78 + new, all green; 3+ platform-gated skips expected on macOS), `uv run ruff check .`, `uv run lint-imports` (2 contracts kept). No TS changes — Node side untouched.
-  - [ ] 8.2 Confirm CI green on the PR: exact tiers must pass on linux/amd64. If CI bits differ from macOS-pinned literals, re-pin from CI output and document (AD-11 — pinned platform is the truth). Awaits commit + push on Rohan's explicit ask.
+  - [x] 8.2 Confirm CI green on the PR: exact tiers must pass on linux/amd64. If CI bits differ from macOS-pinned literals, re-pin from CI output and document (AD-11 — pinned platform is the truth). CONFIRMED: PR #8 CI green — Python (engine) job passed on linux/amd64, so the exact tiers ran and every macOS-pinned literal matched bit-for-bit; no re-pinning needed.
 
 ## Dev Notes
 
