@@ -96,6 +96,8 @@ cd engine && uv run ruff check . && uv run lint-imports
 
 `run_methods` (Story 2.2) is the engine's single computation entry point: it validates the Triangle at the boundary, runs Chain Ladder via chainladder 0.9.2, and returns a `ResultSet` — camelCase-on-the-wire Pydantic contract (AD-10) carrying LDFs, ultimates, and IBNR per Origin Period plus a `Lineage` (engine semver, chainladder version, canonical Triangle hash, all parameters) sufficient to reproduce the run (AD-11). Correctness is gated by Taylor-Ashe golden tests: exact equality on the pinned CI platform (linux/amd64), 1e-8 relative tolerance cross-platform, cross-checked against published Mack (1993) values, with a re-derivation test that replays a stored Lineage.
 
+All three v1 Methods (Story 2.3) run from that same single call: any subset of `{chain_ladder, bornhuetter_ferguson, mack}` in one `run_methods` invocation produces one `ResultSet`. BF takes per-Origin-Period `AprioriLossRatio{origin, lossRatio, exposure}` parameters — the expected-ultimate multiplication happens inside the engine (AD-1: no reserve arithmetic outside it), and an incomplete a-priori set fails at the boundary with a `MissingAprioriError` naming the missing Origin Periods. Mack emits per-origin standard errors, an engine-computed ±1-SE reserve range, and the total Mack standard error, using `sigma_interpolation="mack"` so the Taylor-Ashe golden tests reproduce Mack (1993) published values exactly.
+
 ### Run
 
 ```bash

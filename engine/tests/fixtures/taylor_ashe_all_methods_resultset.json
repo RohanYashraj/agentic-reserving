@@ -1,0 +1,468 @@
+{
+  "schemaVersion": "1.0.0",
+  "lineage": {
+    "engineVersion": "0.1.0",
+    "chainladderVersion": "0.9.2",
+    "triangleHash": "89d944078c9882f9fab501472e25e9e4534b427be81dddbffe85f8f878bdb44f",
+    "parameters": {
+      "methods": [
+        "chain_ladder",
+        "bornhuetter_ferguson",
+        "mack"
+      ],
+      "aprioriLossRatios": [
+        {
+          "origin": "2001",
+          "lossRatio": 0.9,
+          "exposure": 5000000.0
+        },
+        {
+          "origin": "2002",
+          "lossRatio": 0.9,
+          "exposure": 5000000.0
+        },
+        {
+          "origin": "2003",
+          "lossRatio": 0.9,
+          "exposure": 5000000.0
+        },
+        {
+          "origin": "2004",
+          "lossRatio": 0.9,
+          "exposure": 5000000.0
+        },
+        {
+          "origin": "2005",
+          "lossRatio": 0.9,
+          "exposure": 5000000.0
+        },
+        {
+          "origin": "2006",
+          "lossRatio": 0.9,
+          "exposure": 5000000.0
+        },
+        {
+          "origin": "2007",
+          "lossRatio": 0.9,
+          "exposure": 5000000.0
+        },
+        {
+          "origin": "2008",
+          "lossRatio": 0.9,
+          "exposure": 5000000.0
+        },
+        {
+          "origin": "2009",
+          "lossRatio": 0.9,
+          "exposure": 5000000.0
+        },
+        {
+          "origin": "2010",
+          "lossRatio": 0.9,
+          "exposure": 5000000.0
+        }
+      ]
+    }
+  },
+  "methodResults": [
+    {
+      "method": "chain_ladder",
+      "developmentFactors": [
+        {
+          "fromDev": "12",
+          "toDev": "24",
+          "factor": 3.4906065479322863
+        },
+        {
+          "fromDev": "24",
+          "toDev": "36",
+          "factor": 1.7473326421004893
+        },
+        {
+          "fromDev": "36",
+          "toDev": "48",
+          "factor": 1.4574128360182361
+        },
+        {
+          "fromDev": "48",
+          "toDev": "60",
+          "factor": 1.1738517093997867
+        },
+        {
+          "fromDev": "60",
+          "toDev": "72",
+          "factor": 1.103823532244344
+        },
+        {
+          "fromDev": "72",
+          "toDev": "84",
+          "factor": 1.0862693644363943
+        },
+        {
+          "fromDev": "84",
+          "toDev": "96",
+          "factor": 1.0538743555048127
+        },
+        {
+          "fromDev": "96",
+          "toDev": "108",
+          "factor": 1.0765551783529383
+        },
+        {
+          "fromDev": "108",
+          "toDev": "120",
+          "factor": 1.017724725219544
+        }
+      ],
+      "originResults": [
+        {
+          "origin": "2001",
+          "ultimate": 3901463.0,
+          "ibnr": 0.0,
+          "mackStdErr": null,
+          "reserveLow": null,
+          "reserveHigh": null
+        },
+        {
+          "origin": "2002",
+          "ultimate": 5433718.8145487895,
+          "ibnr": 94633.81454878952,
+          "mackStdErr": null,
+          "reserveLow": null,
+          "reserveHigh": null
+        },
+        {
+          "origin": "2003",
+          "ultimate": 5378826.290064239,
+          "ibnr": 469511.29006423894,
+          "mackStdErr": null,
+          "reserveLow": null,
+          "reserveHigh": null
+        },
+        {
+          "origin": "2004",
+          "ultimate": 5297905.820825462,
+          "ibnr": 709637.8208254622,
+          "mackStdErr": null,
+          "reserveLow": null,
+          "reserveHigh": null
+        },
+        {
+          "origin": "2005",
+          "ultimate": 4858199.639049739,
+          "ibnr": 984888.6390497386,
+          "mackStdErr": null,
+          "reserveLow": null,
+          "reserveHigh": null
+        },
+        {
+          "origin": "2006",
+          "ultimate": 5111171.457661663,
+          "ibnr": 1419459.4576616632,
+          "mackStdErr": null,
+          "reserveLow": null,
+          "reserveHigh": null
+        },
+        {
+          "origin": "2007",
+          "ultimate": 5660770.620135548,
+          "ibnr": 2177640.6201355476,
+          "mackStdErr": null,
+          "reserveLow": null,
+          "reserveHigh": null
+        },
+        {
+          "origin": "2008",
+          "ultimate": 6784799.0119525,
+          "ibnr": 3920301.0119525,
+          "mackStdErr": null,
+          "reserveLow": null,
+          "reserveHigh": null
+        },
+        {
+          "origin": "2009",
+          "ultimate": 5642266.263261643,
+          "ibnr": 4278972.263261643,
+          "mackStdErr": null,
+          "reserveLow": null,
+          "reserveHigh": null
+        },
+        {
+          "origin": "2010",
+          "ultimate": 4969824.694424728,
+          "ibnr": 4625810.694424728,
+          "mackStdErr": null,
+          "reserveLow": null,
+          "reserveHigh": null
+        }
+      ],
+      "totalMackStdErr": null
+    },
+    {
+      "method": "bornhuetter_ferguson",
+      "developmentFactors": [
+        {
+          "fromDev": "12",
+          "toDev": "24",
+          "factor": 3.4906065479322863
+        },
+        {
+          "fromDev": "24",
+          "toDev": "36",
+          "factor": 1.7473326421004893
+        },
+        {
+          "fromDev": "36",
+          "toDev": "48",
+          "factor": 1.4574128360182361
+        },
+        {
+          "fromDev": "48",
+          "toDev": "60",
+          "factor": 1.1738517093997867
+        },
+        {
+          "fromDev": "60",
+          "toDev": "72",
+          "factor": 1.103823532244344
+        },
+        {
+          "fromDev": "72",
+          "toDev": "84",
+          "factor": 1.0862693644363943
+        },
+        {
+          "fromDev": "84",
+          "toDev": "96",
+          "factor": 1.0538743555048127
+        },
+        {
+          "fromDev": "96",
+          "toDev": "108",
+          "factor": 1.0765551783529383
+        },
+        {
+          "fromDev": "108",
+          "toDev": "120",
+          "factor": 1.017724725219544
+        }
+      ],
+      "originResults": [
+        {
+          "origin": "2001",
+          "ultimate": 3901463.0,
+          "ibnr": 0.0,
+          "mackStdErr": null,
+          "reserveLow": null,
+          "reserveHigh": null
+        },
+        {
+          "origin": "2002",
+          "ultimate": 5417457.138861756,
+          "ibnr": 78372.13886175584,
+          "mackStdErr": null,
+          "reserveLow": null,
+          "reserveHigh": null
+        },
+        {
+          "origin": "2003",
+          "ultimate": 5302114.59815617,
+          "ibnr": 392799.59815617,
+          "mackStdErr": null,
+          "reserveLow": null,
+          "reserveHigh": null
+        },
+        {
+          "origin": "2004",
+          "ultimate": 5191028.845834934,
+          "ibnr": 602760.8458349342,
+          "mackStdErr": null,
+          "reserveLow": null,
+          "reserveHigh": null
+        },
+        {
+          "origin": "2005",
+          "ultimate": 4785582.871270964,
+          "ibnr": 912271.8712709639,
+          "mackStdErr": null,
+          "reserveLow": null,
+          "reserveHigh": null
+        },
+        {
+          "origin": "2006",
+          "ultimate": 4941438.7235875055,
+          "ibnr": 1249726.7235875055,
+          "mackStdErr": null,
+          "reserveLow": null,
+          "reserveHigh": null
+        },
+        {
+          "origin": "2007",
+          "ultimate": 5214234.022437022,
+          "ibnr": 1731104.022437022,
+          "mackStdErr": null,
+          "reserveLow": null,
+          "reserveHigh": null
+        },
+        {
+          "origin": "2008",
+          "ultimate": 5464627.277626088,
+          "ibnr": 2600129.277626088,
+          "mackStdErr": null,
+          "reserveLow": null,
+          "reserveHigh": null
+        },
+        {
+          "origin": "2009",
+          "ultimate": 4775996.323187843,
+          "ibnr": 3412702.323187843,
+          "mackStdErr": null,
+          "reserveLow": null,
+          "reserveHigh": null
+        },
+        {
+          "origin": "2010",
+          "ultimate": 4532521.523869674,
+          "ibnr": 4188507.5238696737,
+          "mackStdErr": null,
+          "reserveLow": null,
+          "reserveHigh": null
+        }
+      ],
+      "totalMackStdErr": null
+    },
+    {
+      "method": "mack",
+      "developmentFactors": [
+        {
+          "fromDev": "12",
+          "toDev": "24",
+          "factor": 3.4906065479322863
+        },
+        {
+          "fromDev": "24",
+          "toDev": "36",
+          "factor": 1.7473326421004893
+        },
+        {
+          "fromDev": "36",
+          "toDev": "48",
+          "factor": 1.4574128360182361
+        },
+        {
+          "fromDev": "48",
+          "toDev": "60",
+          "factor": 1.1738517093997867
+        },
+        {
+          "fromDev": "60",
+          "toDev": "72",
+          "factor": 1.103823532244344
+        },
+        {
+          "fromDev": "72",
+          "toDev": "84",
+          "factor": 1.0862693644363943
+        },
+        {
+          "fromDev": "84",
+          "toDev": "96",
+          "factor": 1.0538743555048127
+        },
+        {
+          "fromDev": "96",
+          "toDev": "108",
+          "factor": 1.0765551783529383
+        },
+        {
+          "fromDev": "108",
+          "toDev": "120",
+          "factor": 1.017724725219544
+        }
+      ],
+      "originResults": [
+        {
+          "origin": "2001",
+          "ultimate": 3901463.0,
+          "ibnr": 0.0,
+          "mackStdErr": 0.0,
+          "reserveLow": 0.0,
+          "reserveHigh": 0.0
+        },
+        {
+          "origin": "2002",
+          "ultimate": 5433718.8145487895,
+          "ibnr": 94633.81454878952,
+          "mackStdErr": 75535.04075748847,
+          "reserveLow": 19098.77379130105,
+          "reserveHigh": 170168.85530627798
+        },
+        {
+          "origin": "2003",
+          "ultimate": 5378826.290064239,
+          "ibnr": 469511.29006423894,
+          "mackStdErr": 121698.56164542316,
+          "reserveLow": 347812.72841881576,
+          "reserveHigh": 591209.8517096621
+        },
+        {
+          "origin": "2004",
+          "ultimate": 5297905.820825462,
+          "ibnr": 709637.8208254622,
+          "mackStdErr": 133548.85301207818,
+          "reserveLow": 576088.967813384,
+          "reserveHigh": 843186.6738375404
+        },
+        {
+          "origin": "2005",
+          "ultimate": 4858199.639049739,
+          "ibnr": 984888.6390497386,
+          "mackStdErr": 261406.44934268497,
+          "reserveLow": 723482.1897070537,
+          "reserveHigh": 1246295.0883924237
+        },
+        {
+          "origin": "2006",
+          "ultimate": 5111171.457661663,
+          "ibnr": 1419459.4576616632,
+          "mackStdErr": 411009.70388105337,
+          "reserveLow": 1008449.7537806098,
+          "reserveHigh": 1830469.1615427164
+        },
+        {
+          "origin": "2007",
+          "ultimate": 5660770.620135548,
+          "ibnr": 2177640.6201355476,
+          "mackStdErr": 558316.8580711902,
+          "reserveLow": 1619323.7620643573,
+          "reserveHigh": 2735957.478206738
+        },
+        {
+          "origin": "2008",
+          "ultimate": 6784799.0119525,
+          "ibnr": 3920301.0119525,
+          "mackStdErr": 875327.5119113588,
+          "reserveLow": 3044973.500041141,
+          "reserveHigh": 4795628.523863859
+        },
+        {
+          "origin": "2009",
+          "ultimate": 5642266.263261643,
+          "ibnr": 4278972.263261643,
+          "mackStdErr": 971257.8064699423,
+          "reserveLow": 3307714.456791701,
+          "reserveHigh": 5250230.069731586
+        },
+        {
+          "origin": "2010",
+          "ultimate": 4969824.694424728,
+          "ibnr": 4625810.694424728,
+          "mackStdErr": 1363154.9117323074,
+          "reserveLow": 3262655.7826924203,
+          "reserveHigh": 5988965.606157036
+        }
+      ],
+      "totalMackStdErr": 2447094.860834665
+    }
+  ]
+}

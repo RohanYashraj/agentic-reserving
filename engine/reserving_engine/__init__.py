@@ -5,8 +5,9 @@ network, environment, clock access, or logging side effects — enforced
 by the import-linter contracts in pyproject.toml.
 """
 
-from reserving_engine.methods import InvalidTriangleError, run_methods
+from reserving_engine.methods import InvalidTriangleError, MissingAprioriError, run_methods
 from reserving_engine.resultset import (
+    AprioriLossRatio,
     DevelopmentFactor,
     Lineage,
     MethodResult,
@@ -28,10 +29,12 @@ from reserving_engine.version import ENGINE_VERSION
 
 __all__ = [
     "ENGINE_VERSION",
+    "AprioriLossRatio",
     "DevelopmentFactor",
     "InvalidTriangleError",
     "Lineage",
     "MethodResult",
+    "MissingAprioriError",
     "OriginResult",
     "ResultSet",
     "RunParameters",

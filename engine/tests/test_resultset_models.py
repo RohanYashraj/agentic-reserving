@@ -12,6 +12,7 @@ import pytest
 from pydantic import ValidationError
 
 from reserving_engine import (
+    AprioriLossRatio,
     DevelopmentFactor,
     Lineage,
     MethodResult,
@@ -61,7 +62,14 @@ class TestConstruction:
 
     def test_unknown_method_rejected(self):
         with pytest.raises(ValidationError):
-            RunParameters(methods=("bornhuetter_ferguson",))
+            RunParameters(methods=("cape_cod",))
+
+    def test_all_three_v1_methods_accepted(self):
+        params = RunParameters(methods=("chain_ladder", "bornhuetter_ferguson", "mack"))
+        assert params.methods == ("chain_ladder", "bornhuetter_ferguson", "mack")
+
+    def test_apriori_loss_ratios_default_empty(self):
+        assert RunParameters().apriori_loss_ratios == ()
 
     def test_models_are_frozen(self):
         rs = make_resultset()
@@ -86,10 +94,92 @@ class TestWireShape:
             "triangleHash",
             "parameters",
         }
+        assert set(payload["lineage"]["parameters"]) == {"methods", "aprioriLossRatios"}
         method = payload["methodResults"][0]
-        assert set(method) == {"method", "developmentFactors", "originResults"}
+        assert set(method) == {
+            "method",
+            "developmentFactors",
+            "originResults",
+            "totalMackStdErr",
+        }
         assert set(method["developmentFactors"][0]) == {"fromDev", "toDev", "factor"}
-        assert set(method["originResults"][0]) == {"origin", "ultimate", "ibnr"}
+        assert set(method["originResults"][0]) == {
+            "origin",
+            "ultimate",
+            "ibnr",
+            "mackStdErr",
+            "reserveLow",
+            "reserveHigh",
+        }
+
+    def test_apriori_loss_ratio_wire_keys(self):
+        apriori = AprioriLossRatio(origin="2021", loss_ratio=0.9, exposure=5_000_000.0)
+        payload = json.loads(apriori.model_dump_json(by_alias=True))
+        assert set(payload) == {"origin", "lossRatio", "exposure"}
+
+
+class TestAprioriLossRatio:
+    def test_valid_apriori_constructs(self):
+        apriori = AprioriLossRatio(origin="2021", loss_ratio=0.9, exposure=5_000_000.0)
+        assert apriori.loss_ratio == 0.9
+        assert apriori.exposure == 5_000_000.0
+
+    def test_zero_loss_ratio_is_legal(self):
+        # "Expect nothing more" is a legitimate prior.
+        assert AprioriLossRatio(origin="2021", loss_ratio=0.0, exposure=1.0).loss_ratio == 0.0
+
+    def test_negative_loss_ratio_rejected(self):
+        with pytest.raises(ValidationError):
+            AprioriLossRatio(origin="2021", loss_ratio=-0.1, exposure=1.0)
+
+    def test_zero_exposure_rejected(self):
+        with pytest.raises(ValidationError):
+            AprioriLossRatio(origin="2021", loss_ratio=0.9, exposure=0.0)
+
+    def test_negative_exposure_rejected(self):
+        with pytest.raises(ValidationError):
+            AprioriLossRatio(origin="2021", loss_ratio=0.9, exposure=-1.0)
+
+    def test_nan_loss_ratio_rejected(self):
+        with pytest.raises(ValidationError):
+            AprioriLossRatio(origin="2021", loss_ratio=math.nan, exposure=1.0)
+
+    def test_infinite_exposure_rejected(self):
+        with pytest.raises(ValidationError):
+            AprioriLossRatio(origin="2021", loss_ratio=0.9, exposure=math.inf)
+
+
+class TestMackFields:
+    def test_mack_fields_default_none(self):
+        result = OriginResult(origin="2021", ultimate=175.0, ibnr=0.0)
+        assert result.mack_std_err is None
+        assert result.reserve_low is None
+        assert result.reserve_high is None
+
+    def test_total_mack_std_err_defaults_none(self):
+        method = make_resultset().method_results[0]
+        assert method.total_mack_std_err is None
+
+    def test_mack_fields_accept_finite_values(self):
+        result = OriginResult(
+            origin="2021",
+            ultimate=175.0,
+            ibnr=80.0,
+            mack_std_err=12.5,
+            reserve_low=67.5,
+            reserve_high=92.5,
+        )
+        assert result.mack_std_err == 12.5
+        assert result.reserve_low == 67.5
+        assert result.reserve_high == 92.5
+
+    def test_nan_mack_std_err_rejected(self):
+        with pytest.raises(ValidationError):
+            OriginResult(origin="2021", ultimate=175.0, ibnr=80.0, mack_std_err=math.nan)
+
+    def test_infinite_reserve_high_rejected(self):
+        with pytest.raises(ValidationError):
+            OriginResult(origin="2021", ultimate=175.0, ibnr=80.0, reserve_high=math.inf)
 
 
 class TestNonFiniteRejection:
