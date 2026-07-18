@@ -98,6 +98,8 @@ cd engine && uv run ruff check . && uv run lint-imports
 
 All three v1 Methods (Story 2.3) run from that same single call: any subset of `{chain_ladder, bornhuetter_ferguson, mack}` in one `run_methods` invocation produces one `ResultSet`. BF takes per-Origin-Period `AprioriLossRatio{origin, lossRatio, exposure}` parameters — the expected-ultimate multiplication happens inside the engine (AD-1: no reserve arithmetic outside it), and an incomplete a-priori set fails at the boundary with a `MissingAprioriError` naming the missing Origin Periods. Mack emits per-origin standard errors, an engine-computed ±1-SE reserve range, and the total Mack standard error, using `sigma_interpolation="mack"` so the Taylor-Ashe golden tests reproduce Mack (1993) published values exactly.
 
+`compute_diagnostics(triangle, result_set, run_id)` (Story 2.4) derives the four FR-7 Diagnostics into a `DiagnosticsBundle` (camelCase-on-the-wire Pydantic contract, AD-10): LDF stability by Development Period, actual-vs-expected on the Latest Diagonal, CL-vs-BF divergence by Origin Period (present only when both Methods ran, `null` otherwise), and residual heatmap data. Every element carries a stable Diagnostic ID `dx:{runId}:{kind}:{key}` with `kind ∈ {ldf_stability, ave, cl_bf_divergence, residual}`, minted only here; `resolve_diagnostic(bundle, id)` looks an element up by dict walk (IDs are opaque and never string-parsed). Golden-tested against Taylor-Ashe with the same two-tier discipline (exact on linux/amd64, 1e-8 elsewhere) and independent identities for the A-vs-E and residual values.
+
 ### Run
 
 ```bash
