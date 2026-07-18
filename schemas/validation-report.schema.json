@@ -1,0 +1,59 @@
+{
+  "$defs": {
+    "ValidationFinding": {
+      "description": "One cell-level defect, addressed by period labels (never indices).",
+      "properties": {
+        "code": {
+          "enum": [
+            "shape",
+            "paid_monotonicity",
+            "missing_cell",
+            "degenerate_factor"
+          ],
+          "title": "Code",
+          "type": "string"
+        },
+        "dev": {
+          "title": "Dev",
+          "type": "string"
+        },
+        "origin": {
+          "title": "Origin",
+          "type": "string"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "origin",
+        "dev",
+        "reason",
+        "code"
+      ],
+      "title": "ValidationFinding",
+      "type": "object"
+    }
+  },
+  "description": "Typed validation outcome; ``valid`` is derived from ``findings``.",
+  "properties": {
+    "findings": {
+      "items": {
+        "$ref": "#/$defs/ValidationFinding"
+      },
+      "title": "Findings",
+      "type": "array"
+    },
+    "valid": {
+      "title": "Valid",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "valid",
+    "findings"
+  ],
+  "title": "ValidationReport",
+  "type": "object"
+}

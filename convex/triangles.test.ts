@@ -3,7 +3,7 @@ import { convexTest, type TestConvex } from "convex-test";
 import { ConvexError } from "convex/values";
 import type { SchemaDefinition, GenericSchema } from "convex/server";
 import * as XLSX from "xlsx";
-import { describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import schema from "./schema";
@@ -391,5 +391,229 @@ describe("guards + tenancy (AC4)", () => {
     );
     // Same bytes → same rawFileHash across the two Workspaces.
     expect(rows[0].rawFileHash).toBe(rows[1].rawFileHash);
+  });
+});
+
+// --- Story 3.2: validateTriangle action --------------------------------------
+
+/** A well-formed triangle CSV (header row + origin rows). */
+const TRIANGLE_CSV = "origin,12,24,36\n2019,100,150,175\n2020,120,180\n2021,130";
+
+/** Build a JSON Response the way callEngine consumes it. */
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+/** Upload a triangle for analystA and return its id (createFromUpload path). */
+async function seedTriangle(
+  t: Harness,
+  csv = TRIANGLE_CSV,
+  filename = "motor.csv",
+): Promise<Id<"triangles">> {
+  const result = await t.withIdentity(analystA).action(api.triangles.createFromUpload, {
+    workspaceId: "org_A",
+    storageId: await store(t, csvBytes(csv)),
+    label: "paid",
+    filename,
+  });
+  if (result.status !== "created") throw new Error("seed upload was not created");
+  return result.triangleId as Id<"triangles">;
+}
+
+describe("validateTriangle — engine /validate (AC1, AC3, AC4, AC5)", () => {
+  beforeEach(() => {
+    vi.stubEnv("ENGINE_SERVICE_URL", "http://engine.test");
+    vi.stubEnv("ENGINE_SERVICE_SECRET", "test-secret");
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  test("clean pass → report.valid, status stays pending_validation, audited valid:true", async () => {
+    const t = convexTest(schema, modules);
+    const triangleId = await seedTriangle(t);
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({ valid: true, findings: [] }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const out = await t
+      .withIdentity(analystA)
+      .action(api.triangles.validateTriangle, { workspaceId: "org_A", triangleId });
+
+    expect(out.report.valid).toBe(true);
+    expect(out.report.findings).toHaveLength(0);
+    // Parsed grid returned for the preview (snake_case wire shape).
+    expect(out.triangle.origin_periods).toEqual(["2019", "2020", "2021"]);
+    expect(out.triangle.development_periods).toEqual(["12", "24", "36"]);
+    expect(out.triangle.cells[1]).toEqual([120, 180, null]);
+
+    const rows = await triangleRows(t);
+    expect(rows[0].status).toBe("pending_validation");
+
+    const audit = (await auditRows(t)).find((a) => a.eventType === "triangle.validated");
+    expect(audit).toBeDefined();
+    expect(audit?.payload.valid).toBe(true);
+    expect(audit?.payload.findingCount).toBe(0);
+    expect(audit?.actor).toBe("user_a");
+  });
+
+  test("sends snake_case triangle body with a Bearer auth header", async () => {
+    const t = convexTest(schema, modules);
+    const triangleId = await seedTriangle(t);
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({ valid: true, findings: [] }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await t
+      .withIdentity(analystA)
+      .action(api.triangles.validateTriangle, { workspaceId: "org_A", triangleId });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("http://engine.test/validate");
+    expect((init.headers as Record<string, string>).authorization).toBe(
+      "Bearer test-secret",
+    );
+    const sent = JSON.parse(init.body as string);
+    expect(sent).toEqual({
+      triangle: {
+        kind: "paid",
+        origin_periods: ["2019", "2020", "2021"],
+        development_periods: ["12", "24", "36"],
+        cells: [
+          [100, 150, 175],
+          [120, 180, null],
+          [130, null, null],
+        ],
+      },
+    });
+  });
+
+  test("findings → status validation_failed, audited valid:false with findingCodes", async () => {
+    const t = convexTest(schema, modules);
+    const triangleId = await seedTriangle(t);
+    const findings = [
+      { origin: "2020", dev: "24", reason: "paid decreases", code: "paid_monotonicity" },
+      { origin: "2019", dev: "36", reason: "hole", code: "missing_cell" },
+    ];
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ valid: false, findings })));
+
+    const out = await t
+      .withIdentity(analystA)
+      .action(api.triangles.validateTriangle, { workspaceId: "org_A", triangleId });
+
+    expect(out.report.valid).toBe(false);
+    expect(out.report.findings).toHaveLength(2);
+
+    const rows = await triangleRows(t);
+    expect(rows[0].status).toBe("validation_failed");
+
+    const audit = (await auditRows(t)).find((a) => a.eventType === "triangle.validated");
+    expect(audit?.payload.valid).toBe(false);
+    expect(audit?.payload.findingCount).toBe(2);
+    expect(new Set(audit?.payload.findingCodes)).toEqual(
+      new Set(["paid_monotonicity", "missing_cell"]),
+    );
+  });
+
+  test("engine error envelope → ConvexError engine.<code>, message preserved", async () => {
+    const t = convexTest(schema, modules);
+    const triangleId = await seedTriangle(t);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse({ code: "bad_request", message: "ragged rows" }, 422),
+      ),
+    );
+
+    let caught: unknown;
+    try {
+      await t
+        .withIdentity(analystA)
+        .action(api.triangles.validateTriangle, { workspaceId: "org_A", triangleId });
+      expect.unreachable("expected an engine error");
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(ConvexError);
+    const data = (caught as ConvexError<{ code: string; message: string }>).data;
+    expect(data.code).toBe("engine.bad_request");
+    expect(data.message).toBe("ragged rows");
+  });
+
+  test("non-envelope 5xx → ENGINE_UNAVAILABLE", async () => {
+    const t = convexTest(schema, modules);
+    const triangleId = await seedTriangle(t);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response("<html>oops</html>", { status: 502 })),
+    );
+
+    let caught: unknown;
+    try {
+      await t
+        .withIdentity(analystA)
+        .action(api.triangles.validateTriangle, { workspaceId: "org_A", triangleId });
+      expect.unreachable("expected ENGINE_UNAVAILABLE");
+    } catch (e) {
+      caught = e;
+    }
+    expect((caught as ConvexError<{ code: string }>).data.code).toBe("ENGINE_UNAVAILABLE");
+  });
+
+  test("parse error → propagates, no engine call, no triangle.validated audit", async () => {
+    const t = convexTest(schema, modules);
+    // Non-numeric cell: passes CSV readability at upload, fails parseTriangleGrid.
+    const triangleId = await seedTriangle(t, "origin,12,24\n2019,100,oops");
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    let caught: unknown;
+    try {
+      await t
+        .withIdentity(analystA)
+        .action(api.triangles.validateTriangle, { workspaceId: "org_A", triangleId });
+      expect.unreachable("expected a parse rejection");
+    } catch (e) {
+      caught = e;
+    }
+    expect((caught as ConvexError<{ code: string }>).data.code).toBe("UNPARSEABLE_CELL");
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(
+      (await auditRows(t)).some((a) => a.eventType === "triangle.validated"),
+    ).toBe(false);
+  });
+
+  test("guards + tenancy: unauthenticated rejects; org_B cannot validate org_A's Triangle", async () => {
+    const t = convexTest(schema, modules);
+    const triangleId = await seedTriangle(t);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ valid: true, findings: [] })));
+
+    let unauth: unknown;
+    try {
+      await t.action(api.triangles.validateTriangle, { workspaceId: "org_A", triangleId });
+      expect.unreachable("expected UNAUTHENTICATED");
+    } catch (e) {
+      unauth = e;
+    }
+    expect((unauth as ConvexError<{ code: string }>).data.code).toBe("UNAUTHENTICATED");
+
+    let tenancy: unknown;
+    try {
+      await t
+        .withIdentity(analystB)
+        .action(api.triangles.validateTriangle, { workspaceId: "org_B", triangleId });
+      expect.unreachable("expected TRIANGLE_NOT_FOUND");
+    } catch (e) {
+      tenancy = e;
+    }
+    expect((tenancy as ConvexError<{ code: string }>).data.code).toBe("TRIANGLE_NOT_FOUND");
   });
 });

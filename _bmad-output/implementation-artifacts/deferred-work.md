@@ -1,5 +1,12 @@
 # Deferred Work
 
+## Deferred from: Story 3.2 (upload wizard validation) (2026-07-18)
+
+- **Triangle wire keys are snake_case, inconsistent with the rest of the AD-10 contract.** `reserving_engine/triangle.py`'s `Triangle` model uses `ConfigDict(frozen=True)` with no camelCase `alias_generator`, so its JSON Schema / `/validate` + `/runs` request body is `origin_periods`/`development_periods` — while ResultSet/DiagnosticsBundle (and the manual `canonical_triangle_json`) are camelCase. Story 3.2 matched reality (snake_case in `triangleParse.ts`, `triangleValidator`, and the drift check) rather than change a done-story wire contract mid-epic. To make the boundary uniformly camelCase, give `Triangle` the shared `_MODEL_CONFIG` (adds `alias_generator=to_camel, populate_by_name=True`), regenerate `triangle.schema.json`, and flip the Convex validator/parser to camelCase — but verify no engine_service test posts snake_case triangles first. Epic 4 (`/runs`) also sends Triangle, so decide before it hardens. [engine/reserving_engine/triangle.py, convex/lib/triangleParse.ts, convex/lib/engineContract.ts]
+- **Named-stage validation progress is a client-choreographed timer, not real backend sub-progress.** A Convex action can't stream mid-call, so `UploadWizard`'s "Parsing… Validating shape… Checking monotonicity…" advances on a 650ms interval over the single pending `validateTriangle` call. Honest (the stages describe the pipeline, never a bare spinner) but not tied to actual phase completion. If genuine streamed progress is ever wanted, it needs a different transport (e.g. a durable Run with Convex subscription, as Epic 4 uses). [components/UploadWizard.tsx]
+- **A `validation_failed` Triangle lingers after the user re-uploads a fixed file.** "Fix source and re-upload" creates a NEW triangle row (different bytes → different hash, per 3.1's dedupe), leaving the failed row in the library. No cleanup/supersede link exists. Revisit if the library gets noisy (a "superseded by" pointer or a hide-failed filter). [convex/triangles.ts, app/(app)/triangles/page.tsx]
+
+
 ## Deferred from: code review of 1-1-project-scaffold-and-local-dev-environment (2026-07-16)
 
 - ~~Geist fonts are loaded in `app/layout.tsx` but `app/globals.css` body falls back to Arial — dead font pipeline. Resolve in Story 1.3 (brand layer owns typography).~~ **Resolved in Story 1.3** — body now inherits `font-sans` (Geist) via the shadcn base layer; verified by computed-style probe.

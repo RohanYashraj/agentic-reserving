@@ -1,8 +1,17 @@
 import { ConvexError, v } from "convex/values";
 import * as XLSX from "xlsx";
 import { internal } from "./_generated/api";
-import { action, internalMutation, mutation, query } from "./_generated/server";
+import {
+  action,
+  internalMutation,
+  internalQuery,
+  mutation,
+  query,
+} from "./_generated/server";
+import type { ValidationReport } from "./lib/engineContract";
+import { callEngine } from "./lib/engineClient";
 import { requireMember } from "./lib/guards";
+import { parseTriangleGrid } from "./lib/triangleParse";
 
 // FR-1 Triangle upload with duplicate detection. Scope (Story 3.1):
 // upload → store → hash → dedupe → library list. No engine_service call, no
@@ -229,6 +238,120 @@ export const createFromUpload = action({
       payload: { existingTriangleId: result.existingTriangleId, rawFileHash },
     });
     return { status: "duplicate", existingTriangleId: result.existingTriangleId };
+  },
+});
+
+// --- Story 3.2: wizard validation via engine_service /validate --------------
+
+/**
+ * Fetch the fields validateTriangle needs. Internal (no guard) — the calling
+ * action re-checks tenancy against the returned workspaceId before using it.
+ */
+export const getForValidation = internalQuery({
+  args: { triangleId: v.id("triangles") },
+  handler: async (ctx, { triangleId }) => {
+    const row = await ctx.db.get(triangleId);
+    if (row === null) return null;
+    return {
+      workspaceId: row.workspaceId,
+      storageId: row.storageId,
+      label: row.label,
+      format: row.format,
+      rawFileHash: row.rawFileHash,
+    };
+  },
+});
+
+/**
+ * Mark a Triangle validation_failed after engine findings. Clean passes leave
+ * the status as pending_validation (the Triangle still awaits period
+ * confirmation in 3.3). The Triangle is not yet accepted/immutable, so a status
+ * patch is allowed here (immutability lands at acceptance in 3.3).
+ */
+export const markValidationFailed = internalMutation({
+  args: { triangleId: v.id("triangles") },
+  handler: async (ctx, { triangleId }) => {
+    await ctx.db.patch(triangleId, { status: "validation_failed" });
+  },
+});
+
+/**
+ * Parse the stored file into the engine Triangle, call engine_service
+ * /validate, audit the result, and return the parsed grid + findings for the
+ * wizard's flagged preview (FR-2, AC1–AC5).
+ *
+ * An action (not a mutation): it reads storage bytes, makes the outbound engine
+ * HTTP call (AD-12 — only Convex calls the engine), and reaches the AD-6 single
+ * writer via ctx.runMutation. The returned grid is transient/re-derivable —
+ * NOT persisted; 3.3 persists the canonical form at acceptance (AD-3).
+ */
+export const validateTriangle = action({
+  args: {
+    workspaceId: v.string(),
+    triangleId: v.id("triangles"),
+  },
+  handler: async (
+    ctx,
+    { workspaceId, triangleId },
+  ): Promise<{
+    triangle: ReturnType<typeof parseTriangleGrid>;
+    report: ValidationReport;
+    rawFileHash: string;
+  }> => {
+    const { identity } = await requireMember(ctx, workspaceId);
+    const actor = identity.subject;
+
+    // Tenancy: requireMember proves the caller belongs to workspaceId, but the
+    // triangleId arg is attacker-controllable — confirm the row is actually in
+    // this Workspace. Same FORBIDDEN-style opacity: NOT_FOUND either way.
+    const t = await ctx.runQuery(internal.triangles.getForValidation, { triangleId });
+    if (t === null || t.workspaceId !== workspaceId) {
+      throw new ConvexError({
+        code: "TRIANGLE_NOT_FOUND",
+        message: "That Triangle does not exist in this Workspace.",
+      });
+    }
+
+    const blob = await ctx.storage.get(t.storageId);
+    if (blob === null) {
+      throw new ConvexError({
+        code: "UPLOAD_NOT_FOUND",
+        message: "The uploaded file could not be found in storage.",
+      });
+    }
+    const bytes = await blob.arrayBuffer();
+
+    // Parse CSV/XLSX → Triangle. A parse ConvexError (UNPARSEABLE_CELL /
+    // MALFORMED_TRIANGLE / UNREADABLE_*) propagates verbatim; the wizard shows
+    // its message under "Fix source and re-upload". No engine call is made.
+    const triangle = parseTriangleGrid(bytes, t.format, t.label);
+
+    // engine_service /validate takes parsed Triangle JSON (it never parses
+    // files). Returns { valid, findings[] } — HTTP 200 even when invalid.
+    const report = await callEngine<ValidationReport>("/validate", { triangle });
+
+    // Audit the validation result (AD-6 — only appendAuditEntry writes auditLogs;
+    // never inline an insert). runId omitted (no Run exists yet).
+    await ctx.runMutation(internal.auditLogs.appendAuditEntry, {
+      workspaceId,
+      actor,
+      eventType: "triangle.validated",
+      payload: {
+        triangleId,
+        valid: report.valid,
+        findingCount: report.findings.length,
+        findingCodes: [...new Set(report.findings.map((f) => f.code))],
+      },
+    });
+
+    if (!report.valid) {
+      await ctx.runMutation(internal.triangles.markValidationFailed, { triangleId });
+    }
+
+    // rawFileHash is returned so the wizard can show the content hash on a
+    // clean pass (AC4) without a second query. This is the raw-file sha256 —
+    // NOT the canonical-triangle-JSON Lineage hash (3.3 computes that).
+    return { triangle, report, rawFileHash: t.rawFileHash };
   },
 });
 
