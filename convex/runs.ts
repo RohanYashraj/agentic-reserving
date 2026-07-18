@@ -11,6 +11,7 @@ import {
   internalMutation,
   internalQuery,
   mutation,
+  query,
 } from "./_generated/server";
 import { callEngine } from "./lib/engineClient";
 import type { DiagnosticsBundle, ResultSet } from "./lib/engineContract";
@@ -431,5 +432,123 @@ export const onRunComplete = internalMutation({
       });
     }
     // result.kind === "success": storeResultSet already marked complete — no-op.
+  },
+});
+
+// --- Story 4.3: the reactive read surface + idempotent retry -----------------
+
+/**
+ * A single Run by id, for the live Run-detail page (Story 4.3, AC1/2/3/5). This
+ * is the reactive read surface Story 4.2 deliberately deferred ("4.2 only writes
+ * the state 4.3 will read"). Convex `useQuery` IS a live subscription: every
+ * markRunning/storeResultSet/markRunFailed patch re-renders subscribers — no
+ * polling anywhere (FR-20).
+ *
+ * Public → requireMember first (AD-4); then a tenancy re-check (runId is
+ * attacker-controllable) returns `null` for a row outside this Workspace, so
+ * existence never leaks (exact shape of triangles.getById).
+ *
+ * LEAN projection (AD-1): status/methods/error/timestamps + hasResults/
+ * hasDiagnostics booleans ONLY — NEVER the resultSet/diagnosticsBundle figures.
+ * Reserve-figure rendering is Stories 4.4–4.6.
+ */
+export const getRun = query({
+  args: { workspaceId: v.string(), runId: v.id("runs") },
+  handler: async (ctx, { workspaceId, runId }) => {
+    await requireMember(ctx, workspaceId);
+    const run = await ctx.db.get(runId);
+    if (run === null || run.workspaceId !== workspaceId) return null;
+    return {
+      _id: run._id,
+      status: run.status, // queued | running | complete | failed
+      triangleId: run.triangleId,
+      triangleHash: run.triangleHash,
+      methods: run.parameters.methods, // per-Method rows
+      error: run.error ?? null, // { code, message } | null
+      createdAt: run.createdAt,
+      startedAt: run.startedAt ?? null,
+      completedAt: run.completedAt ?? null,
+      failedAt: run.failedAt ?? null,
+      // Booleans gate the Results/Diagnostics tabs + step rail WITHOUT leaking
+      // any figures (AD-1) — the figures arrive in 4.4–4.6.
+      hasResults: run.resultSet !== undefined,
+      hasDiagnostics: run.diagnosticsBundle !== undefined,
+    };
+  },
+});
+
+/**
+ * Idempotent "Retry run" (Story 4.3, AC4/6) — the one new status writer Story
+ * 4.2 anticipated ("that's 4.3's idempotent 'Retry run' UI, which will re-enter
+ * this same orchestration"). The runs record stays the sole status authority
+ * (AD-7); this adds exactly one tightly-guarded transition, `failed → queued`,
+ * and hands back to the UNCHANGED runWorkflow.
+ *
+ * Idempotent by construction: the `status === "failed"` guard means a
+ * double-click (2nd click sees queued/running) or a retry of a non-failed Run is
+ * rejected — no duplicate workflow, no divergent numbers (the engine is
+ * deterministic + stateless, NFR-4).
+ */
+export const retryRun = mutation({
+  args: { workspaceId: v.string(), runId: v.id("runs") },
+  handler: async (ctx, { workspaceId, runId }) => {
+    // AD-4: identity + membership before anything else.
+    const { identity } = await requireMember(ctx, workspaceId);
+    const actor = identity.subject;
+
+    // Tenancy + existence. Same code for wrong-workspace and absent — existence
+    // never leaks (mirrors createRun's triangle check).
+    const run = await ctx.db.get(runId);
+    if (run === null || run.workspaceId !== workspaceId) {
+      throw new ConvexError({
+        code: "RUN_NOT_FOUND",
+        message: "That Run does not exist in this Workspace.",
+      });
+    }
+
+    // Idempotency guard (NFR-4): only a failed Run can be retried. A second
+    // click (now queued/running) or a retry of a complete/queued/running Run
+    // throws — no duplicate work.
+    if (run.status !== "failed") {
+      throw new ConvexError({
+        code: "RUN_NOT_RETRYABLE",
+        message: "Only a failed Run can be retried.",
+      });
+    }
+
+    // The ONE new status writer beyond 4.2 (failed → queued). Clear the stale
+    // lifecycle fields; resultSet/diagnosticsBundle are already absent on a
+    // failed row.
+    await ctx.db.patch(runId, {
+      status: "queued",
+      error: undefined,
+      startedAt: undefined,
+      completedAt: undefined,
+      failedAt: undefined,
+    });
+
+    // Atomic audit (AD-6) — single writer, lean payload (no figures).
+    await appendAuditEntryInTransaction(ctx, {
+      workspaceId,
+      actor,
+      eventType: "run.retried",
+      runId,
+      payload: { runId, retriedFrom: run.error?.code ?? "unknown" },
+    });
+
+    // Re-enter the unchanged 4.2 orchestration (identical to createRun's tail).
+    // The prior (failed) workflow is terminal; a fresh one is correct and the
+    // new workflowId overwrites the stale one. workflow.start schedules
+    // transactionally within this mutation (job-record-first is preserved: the
+    // run row already exists and the reset + audit commit before kickoff).
+    const workflowId = await workflow.start(
+      ctx,
+      internal.runs.runWorkflow,
+      { runId, workspaceId, actor },
+      { onComplete: internal.runs.onRunComplete, context: { runId, actor } },
+    );
+    await ctx.db.patch(runId, { workflowId });
+
+    return { runId, status: "queued" as const };
   },
 });

@@ -861,3 +861,232 @@ describe("orchestration — audit chain integrity across the lifecycle (AC4, AC6
     expect(verification).toEqual({ valid: true, length: 3 });
   });
 });
+
+// --- Story 4.3: getRun (reactive read surface) + retryRun --------------------
+
+/** Seed a `complete` run carrying a ResultSet + DiagnosticsBundle. */
+async function seedCompleteRun(
+  t: Harness,
+  triangleId: Id<"triangles">,
+): Promise<Id<"runs">> {
+  return await t.run((ctx) =>
+    ctx.db.insert("runs", {
+      workspaceId: "org_A",
+      triangleId,
+      triangleHash: TRIANGLE_HASH,
+      status: "complete",
+      parameters: { methods: ["chain_ladder", "mack"], aprioriLossRatios: [] },
+      createdBy: "user_a",
+      createdAt: "2026-07-19T00:00:00.000Z",
+      resultSet: makeResultSet(TRIANGLE_HASH, ["chain_ladder", "mack"]),
+      diagnosticsBundle: makeDiagnosticsBundle("placeholder", TRIANGLE_HASH),
+      startedAt: "2026-07-19T00:00:01.000Z",
+      completedAt: "2026-07-19T00:00:02.000Z",
+    }),
+  );
+}
+
+/** Seed a `failed` run carrying an error + failedAt. */
+async function seedFailedRun(
+  t: Harness,
+  triangleId: Id<"triangles">,
+): Promise<Id<"runs">> {
+  return await t.run((ctx) =>
+    ctx.db.insert("runs", {
+      workspaceId: "org_A",
+      triangleId,
+      triangleHash: TRIANGLE_HASH,
+      status: "failed",
+      parameters: { methods: ["chain_ladder"], aprioriLossRatios: [] },
+      createdBy: "user_a",
+      createdAt: "2026-07-19T00:00:00.000Z",
+      error: { code: "ENGINE_UNAVAILABLE", message: "down" },
+      startedAt: "2026-07-19T00:00:01.000Z",
+      failedAt: "2026-07-19T00:00:02.000Z",
+    }),
+  );
+}
+
+describe("getRun — lean projection + tenancy (AC6)", () => {
+  test("queued run → lean projection, no figures, hasResults/hasDiagnostics false", async () => {
+    const t = initConvexTest();
+    const triangleId = await seedValidatedTriangle(t);
+    const runId = await seedRun(t, triangleId, "queued");
+
+    const view = await t
+      .withIdentity(analystA)
+      .query(api.runs.getRun, { workspaceId: "org_A", runId });
+
+    expect(view).not.toBeNull();
+    expect(view?.status).toBe("queued");
+    expect(view?.methods).toEqual(["chain_ladder"]);
+    expect(view?.error).toBeNull();
+    expect(view?.triangleHash).toBe(TRIANGLE_HASH);
+    expect(view?.hasResults).toBe(false);
+    expect(view?.hasDiagnostics).toBe(false);
+    // AD-1: the projection never carries the figures.
+    expect(view).not.toHaveProperty("resultSet");
+    expect(view).not.toHaveProperty("diagnosticsBundle");
+  });
+
+  test("complete run → hasResults/hasDiagnostics true, still no figures", async () => {
+    const t = initConvexTest();
+    const triangleId = await seedValidatedTriangle(t);
+    const runId = await seedCompleteRun(t, triangleId);
+
+    const view = await t
+      .withIdentity(analystA)
+      .query(api.runs.getRun, { workspaceId: "org_A", runId });
+
+    expect(view?.status).toBe("complete");
+    expect(view?.methods).toEqual(["chain_ladder", "mack"]);
+    expect(view?.hasResults).toBe(true);
+    expect(view?.hasDiagnostics).toBe(true);
+    expect(view?.completedAt).toBe("2026-07-19T00:00:02.000Z");
+    expect(view).not.toHaveProperty("resultSet");
+    expect(view).not.toHaveProperty("diagnosticsBundle");
+  });
+
+  test("failed run → carries the error message", async () => {
+    const t = initConvexTest();
+    const triangleId = await seedValidatedTriangle(t);
+    const runId = await seedFailedRun(t, triangleId);
+
+    const view = await t
+      .withIdentity(analystA)
+      .query(api.runs.getRun, { workspaceId: "org_A", runId });
+
+    expect(view?.status).toBe("failed");
+    expect(view?.error).toEqual({ code: "ENGINE_UNAVAILABLE", message: "down" });
+    expect(view?.failedAt).toBe("2026-07-19T00:00:02.000Z");
+  });
+
+  test("a run in another Workspace → null (existence never leaks)", async () => {
+    const t = initConvexTest();
+    const triangleId = await seedValidatedTriangle(t, "org_A");
+    const runId = await seedRun(t, triangleId, "queued");
+
+    const view = await t
+      .withIdentity(analystB)
+      .query(api.runs.getRun, { workspaceId: "org_B", runId });
+
+    expect(view).toBeNull();
+  });
+});
+
+describe("retryRun — idempotent re-entry (AC4, AC6)", () => {
+  test("failed → queued, fields cleared, run.retried appended, chain valid", async () => {
+    const t = initConvexTest();
+    const triangleId = await seedValidatedTriangle(t);
+    // Real run.created (seq 0) so the chain has a genesis to extend.
+    const { runId } = await t
+      .withIdentity(analystA)
+      .mutation(api.runs.createRun, {
+        workspaceId: "org_A",
+        triangleId,
+        parameters: { methods: ["chain_ladder"], aprioriLossRatios: [] },
+      });
+    // Drive it to failed (created → started → failed).
+    await t.mutation(internal.runs.markRunning, { runId, actor: "user_a" });
+    await t.mutation(internal.runs.markRunFailed, {
+      runId,
+      actor: "user_a",
+      error: { code: "ENGINE_UNAVAILABLE", message: "down" },
+    });
+
+    const result = await t
+      .withIdentity(analystA)
+      .mutation(api.runs.retryRun, { workspaceId: "org_A", runId });
+    expect(result.status).toBe("queued");
+
+    const run = await getRun(t, runId);
+    expect(run?.status).toBe("queued");
+    expect(run?.error).toBeUndefined();
+    expect(run?.failedAt).toBeUndefined();
+    expect(run?.startedAt).toBeUndefined();
+    expect(run?.completedAt).toBeUndefined();
+    expect(typeof run?.workflowId).toBe("string");
+
+    const retried = (await auditRows(t)).filter(
+      (a) => a.eventType === "run.retried",
+    );
+    expect(retried).toHaveLength(1);
+    expect(retried[0].payload).toMatchObject({
+      runId,
+      retriedFrom: "ENGINE_UNAVAILABLE",
+    });
+
+    const verification = await t
+      .withIdentity(analystA)
+      .query(api.auditLogs.verifyChain, { workspaceId: "org_A" });
+    // AC6: the retry re-entry keeps the per-Workspace hash chain valid. (Exact
+    // length is left unpinned — the workflow kickoff the harness drives can add
+    // its own lifecycle entries; run.retried appearing exactly once above is the
+    // assertion that matters.)
+    expect(verification.valid).toBe(true);
+  });
+
+  test("idempotency guard: retrying a non-failed run → RUN_NOT_RETRYABLE, no audit", async () => {
+    const t = initConvexTest();
+    const triangleId = await seedValidatedTriangle(t);
+    for (const status of ["queued", "running", "complete"] as const) {
+      const runId =
+        status === "complete"
+          ? await seedCompleteRun(t, triangleId)
+          : await seedRun(t, triangleId, status);
+      let code: string | undefined;
+      try {
+        await t
+          .withIdentity(analystA)
+          .mutation(api.runs.retryRun, { workspaceId: "org_A", runId });
+      } catch (error) {
+        code = (error as ConvexError<{ code: string }>).data.code;
+      }
+      expect(code).toBe("RUN_NOT_RETRYABLE");
+    }
+    expect(
+      (await auditRows(t)).filter((a) => a.eventType === "run.retried"),
+    ).toHaveLength(0);
+  });
+
+  test("double-click safe: a second retry (now queued) throws RUN_NOT_RETRYABLE", async () => {
+    const t = initConvexTest();
+    const triangleId = await seedValidatedTriangle(t);
+    const runId = await seedFailedRun(t, triangleId);
+
+    await t
+      .withIdentity(analystA)
+      .mutation(api.runs.retryRun, { workspaceId: "org_A", runId });
+
+    let code: string | undefined;
+    try {
+      await t
+        .withIdentity(analystA)
+        .mutation(api.runs.retryRun, { workspaceId: "org_A", runId });
+    } catch (error) {
+      code = (error as ConvexError<{ code: string }>).data.code;
+    }
+    expect(code).toBe("RUN_NOT_RETRYABLE");
+    // Exactly one re-entry — no duplicate work.
+    expect(
+      (await auditRows(t)).filter((a) => a.eventType === "run.retried"),
+    ).toHaveLength(1);
+  });
+
+  test("tenancy: org B retrying org A's failed run → RUN_NOT_FOUND", async () => {
+    const t = initConvexTest();
+    const triangleId = await seedValidatedTriangle(t, "org_A");
+    const runId = await seedFailedRun(t, triangleId);
+
+    let code: string | undefined;
+    try {
+      await t
+        .withIdentity(analystB)
+        .mutation(api.runs.retryRun, { workspaceId: "org_B", runId });
+    } catch (error) {
+      code = (error as ConvexError<{ code: string }>).data.code;
+    }
+    expect(code).toBe("RUN_NOT_FOUND");
+    expect((await getRun(t, runId))?.status).toBe("failed"); // untouched
+  });
+});

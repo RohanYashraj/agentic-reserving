@@ -7,6 +7,12 @@ vi.mock("convex/react", () => ({
   useMutation: () => vi.fn(),
 }));
 
+// RunConfig now navigates to /runs/{runId} on a successful start — stub the
+// App Router so the component renders under jsdom.
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: vi.fn() }),
+}));
+
 import { RunConfig } from "@/components/RunConfig";
 import type { Id } from "@/convex/_generated/dataModel";
 

@@ -2,11 +2,13 @@
 
 import { ConvexError } from "convex/values";
 import { useMutation } from "convex/react";
+import { useRouter } from "next/navigation";
 import { useState, type ClipboardEvent } from "react";
 
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import type { Method } from "@/convex/lib/engineContract";
+import { METHOD_OPTIONS } from "@/components/methods";
 import {
   isMultiColumnPaste,
   parseNumberCell,
@@ -26,12 +28,6 @@ type AcceptedTriangle = {
   development_periods: string[];
   cells: (number | null)[][];
 };
-
-const METHOD_OPTIONS: { value: Method; label: string }[] = [
-  { value: "chain_ladder", label: "Chain Ladder (CL)" },
-  { value: "bornhuetter_ferguson", label: "Bornhuetter-Ferguson (BF)" },
-  { value: "mack", label: "Mack" },
-];
 
 function errorMessage(error: unknown): string {
   return error instanceof ConvexError &&
@@ -60,6 +56,7 @@ export function RunConfig({
   triangle: AcceptedTriangle;
 }) {
   const createRun = useMutation(api.runs.createRun);
+  const router = useRouter();
   const origins = triangle.origin_periods;
 
   const [selected, setSelected] = useState<Record<Method, boolean>>({
@@ -76,7 +73,6 @@ export function RunConfig({
 
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [queuedRunId, setQueuedRunId] = useState<string | null>(null);
 
   const methods = METHOD_OPTIONS.filter((m) => selected[m.value]).map(
     (m) => m.value,
@@ -88,14 +84,10 @@ export function RunConfig({
     (_, i) => lossRatioValid(lossRatios[i]) && premiumValid(premiums[i]),
   );
   const canStart =
-    !pending &&
-    queuedRunId === null &&
-    methods.length >= 1 &&
-    (!bfSelected || everyOriginComplete);
+    !pending && methods.length >= 1 && (!bfSelected || everyOriginComplete);
 
   function toggleMethod(value: Method) {
     setSelected((prev) => ({ ...prev, [value]: !prev[value] }));
-    setQueuedRunId(null);
     setError(null);
   }
 
@@ -110,7 +102,6 @@ export function RunConfig({
       next[index] = value;
       return next;
     });
-    setQueuedRunId(null);
     setError(null);
   }
 
@@ -166,7 +157,6 @@ export function RunConfig({
         return next;
       });
     }
-    setQueuedRunId(null);
     setError(null);
   }
 
@@ -186,32 +176,14 @@ export function RunConfig({
         triangleId,
         parameters: { methods, aprioriLossRatios },
       });
-      setQueuedRunId(result.runId);
+      // 4.1 → 4.3 handoff: navigate to the live Run detail surface. Leave
+      // `pending` true — we are navigating away and the detail page takes over
+      // (do not re-enable Start under the departing view).
+      router.push(`/runs/${result.runId}`);
     } catch (err) {
       setError(errorMessage(err));
-    } finally {
       setPending(false);
     }
-  }
-
-  if (queuedRunId !== null) {
-    return (
-      <div
-        className="rounded-md border border-border bg-published/10 p-6"
-        aria-live="polite"
-      >
-        <h2 className="text-lg font-semibold text-published">Run queued</h2>
-        <p className="mt-2 text-sm text-muted-foreground">
-          {METHOD_OPTIONS.filter((m) => methods.includes(m.value))
-            .map((m) => m.label)
-            .join(" · ")}{" "}
-          over this Triangle. The run detail view lands in a later story.
-        </p>
-        <p className="mt-2 text-xs text-muted-foreground">
-          Run ID: <span className="numeric">{queuedRunId}</span>
-        </p>
-      </div>
-    );
   }
 
   return (

@@ -73,6 +73,10 @@ const publicFunctionArgs: Record<string, Record<string, unknown>> = {
     workspaceId: "org_test",
     parameters: { methods: ["chain_ladder"], aprioriLossRatios: [] },
   },
+  // getRun/retryRun take a v.id("runs") validated before the guard runs — a real
+  // run row id is injected at call time (like createRun's triangleId).
+  "runs:getRun": { workspaceId: "org_test" },
+  "runs:retryRun": { workspaceId: "org_test" },
 };
 
 type Harness = TestConvex<SchemaDefinition<GenericSchema, boolean>>;
@@ -201,6 +205,19 @@ describe("auth-guard enumeration (NFR-3)", () => {
           uploadedAt: "2026-07-18T00:00:00.000Z",
         }),
     );
+    // getRun/retryRun need a real v.id("runs"); seed a minimal queued run.
+    const runId = await t.run(
+      async (ctx) =>
+        await ctx.db.insert("runs", {
+          workspaceId: "org_test",
+          triangleId,
+          triangleHash: "seedhash",
+          status: "queued",
+          parameters: { methods: ["chain_ladder"], aprioriLossRatios: [] },
+          createdBy: "user_seed",
+          createdAt: "2026-07-19T00:00:00.000Z",
+        }),
+    );
     const argsFor = (path: string): Record<string, unknown> => {
       if (path === "triangles:createFromUpload") {
         return { ...publicFunctionArgs[path], storageId };
@@ -212,6 +229,9 @@ describe("auth-guard enumeration (NFR-3)", () => {
         path === "runs:createRun"
       ) {
         return { ...publicFunctionArgs[path], triangleId };
+      }
+      if (path === "runs:getRun" || path === "runs:retryRun") {
+        return { ...publicFunctionArgs[path], runId };
       }
       return publicFunctionArgs[path];
     };
