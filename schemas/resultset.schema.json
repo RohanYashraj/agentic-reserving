@@ -1,0 +1,242 @@
+{
+  "$defs": {
+    "AprioriLossRatio": {
+      "description": "One Origin Period's BF prior: A Priori Loss Ratio plus exposure base.\n\nBF's expected ultimate is ``loss_ratio \u00d7 exposure``. That is\nreserve-figure arithmetic, so it happens inside the engine (AD-1) \u2014\nwhich is why the exposure travels with the loss ratio rather than\nbeing multiplied upstream. A zero loss ratio is a legal \"expect\nnothing more\" prior; a non-positive exposure is garbage.",
+      "properties": {
+        "exposure": {
+          "title": "Exposure",
+          "type": "number"
+        },
+        "lossRatio": {
+          "title": "Lossratio",
+          "type": "number"
+        },
+        "origin": {
+          "title": "Origin",
+          "type": "string"
+        }
+      },
+      "required": [
+        "origin",
+        "lossRatio",
+        "exposure"
+      ],
+      "title": "AprioriLossRatio",
+      "type": "object"
+    },
+    "DevelopmentFactor": {
+      "description": "One age-to-age factor, keyed by Development Period labels.",
+      "properties": {
+        "factor": {
+          "title": "Factor",
+          "type": "number"
+        },
+        "fromDev": {
+          "title": "Fromdev",
+          "type": "string"
+        },
+        "toDev": {
+          "title": "Todev",
+          "type": "string"
+        }
+      },
+      "required": [
+        "fromDev",
+        "toDev",
+        "factor"
+      ],
+      "title": "DevelopmentFactor",
+      "type": "object"
+    },
+    "Lineage": {
+      "description": "The AD-11 reproduction recipe for a ResultSet.",
+      "properties": {
+        "chainladderVersion": {
+          "title": "Chainladderversion",
+          "type": "string"
+        },
+        "engineVersion": {
+          "title": "Engineversion",
+          "type": "string"
+        },
+        "parameters": {
+          "$ref": "#/$defs/RunParameters"
+        },
+        "triangleHash": {
+          "title": "Trianglehash",
+          "type": "string"
+        }
+      },
+      "required": [
+        "engineVersion",
+        "chainladderVersion",
+        "triangleHash",
+        "parameters"
+      ],
+      "title": "Lineage",
+      "type": "object"
+    },
+    "MethodResult": {
+      "description": "One Method's full output: LDFs plus one OriginResult per row.\n\n``total_mack_std_err`` (Mack only, else ``None``) is emitted by the\nengine because the total is NOT the sum of per-origin standard\nerrors (correlation term) \u2014 nothing outside the engine may compute\nit (AD-1).",
+      "properties": {
+        "developmentFactors": {
+          "items": {
+            "$ref": "#/$defs/DevelopmentFactor"
+          },
+          "title": "Developmentfactors",
+          "type": "array"
+        },
+        "method": {
+          "enum": [
+            "chain_ladder",
+            "bornhuetter_ferguson",
+            "mack"
+          ],
+          "title": "Method",
+          "type": "string"
+        },
+        "originResults": {
+          "items": {
+            "$ref": "#/$defs/OriginResult"
+          },
+          "title": "Originresults",
+          "type": "array"
+        },
+        "totalMackStdErr": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Totalmackstderr"
+        }
+      },
+      "required": [
+        "method",
+        "developmentFactors",
+        "originResults"
+      ],
+      "title": "MethodResult",
+      "type": "object"
+    },
+    "OriginResult": {
+      "description": "Ultimate and IBNR for one Origin Period.\n\nThe Mack fields are populated only when the Method is Mack (``None``\nfor CL/BF). ``reserve_low``/``reserve_high`` are the engine-computed\n\u00b11-standard-error band around IBNR \u2014 not floored at zero: a band\nthat crosses zero is information, not an error.",
+      "properties": {
+        "ibnr": {
+          "title": "Ibnr",
+          "type": "number"
+        },
+        "mackStdErr": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mackstderr"
+        },
+        "origin": {
+          "title": "Origin",
+          "type": "string"
+        },
+        "reserveHigh": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reservehigh"
+        },
+        "reserveLow": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reservelow"
+        },
+        "ultimate": {
+          "title": "Ultimate",
+          "type": "number"
+        }
+      },
+      "required": [
+        "origin",
+        "ultimate",
+        "ibnr"
+      ],
+      "title": "OriginResult",
+      "type": "object"
+    },
+    "RunParameters": {
+      "description": "All caller-supplied knobs for a run. Recorded verbatim in Lineage.",
+      "properties": {
+        "aprioriLossRatios": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/AprioriLossRatio"
+          },
+          "title": "Apriorilossratios",
+          "type": "array"
+        },
+        "methods": {
+          "default": [
+            "chain_ladder"
+          ],
+          "items": {
+            "enum": [
+              "chain_ladder",
+              "bornhuetter_ferguson",
+              "mack"
+            ],
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Methods",
+          "type": "array"
+        }
+      },
+      "title": "RunParameters",
+      "type": "object"
+    }
+  },
+  "description": "The engine's complete, self-describing output for one run.",
+  "properties": {
+    "lineage": {
+      "$ref": "#/$defs/Lineage"
+    },
+    "methodResults": {
+      "items": {
+        "$ref": "#/$defs/MethodResult"
+      },
+      "title": "Methodresults",
+      "type": "array"
+    },
+    "schemaVersion": {
+      "default": "1.0.0",
+      "title": "Schemaversion",
+      "type": "string"
+    }
+  },
+  "required": [
+    "lineage",
+    "methodResults"
+  ],
+  "title": "ResultSet",
+  "type": "object"
+}

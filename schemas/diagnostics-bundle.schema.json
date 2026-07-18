@@ -1,0 +1,293 @@
+{
+  "$defs": {
+    "AveElement": {
+      "description": "Actual vs expected on the Latest Diagonal for one Origin Period.\n\n``expected = prior_cell \u00d7 selected_factor`` (AD-1 arithmetic).\n``actual_to_expected_ratio`` is ``None`` when ``expected == 0.0`` \u2014\nnever a division by zero, never a non-finite value.",
+      "properties": {
+        "actual": {
+          "title": "Actual",
+          "type": "number"
+        },
+        "actualMinusExpected": {
+          "title": "Actualminusexpected",
+          "type": "number"
+        },
+        "actualToExpectedRatio": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Actualtoexpectedratio"
+        },
+        "expected": {
+          "title": "Expected",
+          "type": "number"
+        },
+        "fromDev": {
+          "title": "Fromdev",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "origin": {
+          "title": "Origin",
+          "type": "string"
+        },
+        "toDev": {
+          "title": "Todev",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "origin",
+        "fromDev",
+        "toDev",
+        "actual",
+        "expected",
+        "actualMinusExpected"
+      ],
+      "title": "AveElement",
+      "type": "object"
+    },
+    "ClBfDivergenceElement": {
+      "description": "CL-vs-BF divergence for one Origin Period.\n\nRead from the two MethodResults' ultimates (never recomputed \u2014 the\nResultSet is the number authority, AD-1). ``relative_divergence`` is\n``None`` when ``bf_ultimate == 0.0``.",
+      "properties": {
+        "bfUltimate": {
+          "title": "Bfultimate",
+          "type": "number"
+        },
+        "clUltimate": {
+          "title": "Clultimate",
+          "type": "number"
+        },
+        "divergence": {
+          "title": "Divergence",
+          "type": "number"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "origin": {
+          "title": "Origin",
+          "type": "string"
+        },
+        "relativeDivergence": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Relativedivergence"
+        }
+      },
+      "required": [
+        "id",
+        "origin",
+        "clUltimate",
+        "bfUltimate",
+        "divergence"
+      ],
+      "title": "ClBfDivergenceElement",
+      "type": "object"
+    },
+    "LdfStabilityElement": {
+      "description": "LDF stability for one Development Period transition.\n\n``sigma``/``std_err``/``cv`` are ``None`` when chainladder cannot\nextrapolate the sigma for this transition (e.g. a single-observation\ncolumn) \u2014 \"unknown\", never a fake 0.0.",
+      "properties": {
+        "cv": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cv"
+        },
+        "fromDev": {
+          "title": "Fromdev",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "linkRatios": {
+          "items": {
+            "$ref": "#/$defs/LinkRatio"
+          },
+          "title": "Linkratios",
+          "type": "array"
+        },
+        "selectedFactor": {
+          "title": "Selectedfactor",
+          "type": "number"
+        },
+        "sigma": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sigma"
+        },
+        "stdErr": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Stderr"
+        },
+        "toDev": {
+          "title": "Todev",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "fromDev",
+        "toDev",
+        "selectedFactor",
+        "linkRatios"
+      ],
+      "title": "LdfStabilityElement",
+      "type": "object"
+    },
+    "LinkRatio": {
+      "description": "One observed age-to-age factor, child of an LdfStabilityElement.\n\nNot ID-carrying: it is a value inside a stability element, not a\ncitable Diagnostic in its own right.",
+      "properties": {
+        "factor": {
+          "title": "Factor",
+          "type": "number"
+        },
+        "origin": {
+          "title": "Origin",
+          "type": "string"
+        }
+      },
+      "required": [
+        "origin",
+        "factor"
+      ],
+      "title": "LinkRatio",
+      "type": "object"
+    },
+    "ResidualElement": {
+      "description": "One standardized development residual (heatmap cell).",
+      "properties": {
+        "fromDev": {
+          "title": "Fromdev",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "origin": {
+          "title": "Origin",
+          "type": "string"
+        },
+        "residual": {
+          "title": "Residual",
+          "type": "number"
+        },
+        "toDev": {
+          "title": "Todev",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "origin",
+        "fromDev",
+        "toDev",
+        "residual"
+      ],
+      "title": "ResidualElement",
+      "type": "object"
+    }
+  },
+  "description": "The engine's complete, self-describing Diagnostics for one Run.\n\n``cl_bf_divergence`` is ``None`` (wire ``null``) when CL and BF did\nnot both run \u2014 \"not applicable\", distinct from ``()`` which would\nread as \"computed, nothing found\". ``triangle_hash`` ties the bundle\nto its Triangle the same way Lineage does (canonical-triangle-JSON\nsha256, never the raw-file hash).",
+  "properties": {
+    "ave": {
+      "items": {
+        "$ref": "#/$defs/AveElement"
+      },
+      "title": "Ave",
+      "type": "array"
+    },
+    "clBfDivergence": {
+      "anyOf": [
+        {
+          "items": {
+            "$ref": "#/$defs/ClBfDivergenceElement"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Clbfdivergence"
+    },
+    "ldfStability": {
+      "items": {
+        "$ref": "#/$defs/LdfStabilityElement"
+      },
+      "title": "Ldfstability",
+      "type": "array"
+    },
+    "residuals": {
+      "items": {
+        "$ref": "#/$defs/ResidualElement"
+      },
+      "title": "Residuals",
+      "type": "array"
+    },
+    "runId": {
+      "title": "Runid",
+      "type": "string"
+    },
+    "schemaVersion": {
+      "default": "1.0.0",
+      "title": "Schemaversion",
+      "type": "string"
+    },
+    "triangleHash": {
+      "title": "Trianglehash",
+      "type": "string"
+    }
+  },
+  "required": [
+    "runId",
+    "triangleHash",
+    "ldfStability",
+    "ave",
+    "residuals"
+  ],
+  "title": "DiagnosticsBundle",
+  "type": "object"
+}

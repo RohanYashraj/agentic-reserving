@@ -11,7 +11,10 @@ import pytest
 
 from reserving_engine import (
     ENGINE_VERSION,
+    AprioriLossRatio,
+    InvalidAprioriError,
     InvalidTriangleError,
+    MissingAprioriError,
     ResultSet,
     RunParameters,
     Triangle,
@@ -28,6 +31,16 @@ SMALL_TRIANGLE = Triangle(
         (110.0, 160.0, None),
         (120.0, None, None),
     ),
+)
+
+SMALL_APRIORIS = tuple(
+    AprioriLossRatio(origin=origin, loss_ratio=0.9, exposure=200.0)
+    for origin in SMALL_TRIANGLE.origin_periods
+)
+
+ALL_METHODS = RunParameters(
+    methods=("chain_ladder", "bornhuetter_ferguson", "mack"),
+    apriori_loss_ratios=SMALL_APRIORIS,
 )
 
 
@@ -100,6 +113,167 @@ class TestDeterminism:
         a = run_methods(SMALL_TRIANGLE).model_dump_json(by_alias=True)
         b = run_methods(SMALL_TRIANGLE).model_dump_json(by_alias=True)
         assert a == b
+
+    def test_repeated_three_method_runs_are_bit_identical(self):
+        a = run_methods(SMALL_TRIANGLE, ALL_METHODS).model_dump_json(by_alias=True)
+        b = run_methods(SMALL_TRIANGLE, ALL_METHODS).model_dump_json(by_alias=True)
+        assert a == b
+
+
+class TestMethodCombinations:
+    def test_all_three_methods_in_one_call_one_resultset(self):
+        rs = run_methods(SMALL_TRIANGLE, ALL_METHODS)
+        assert isinstance(rs, ResultSet)
+        assert tuple(m.method for m in rs.method_results) == (
+            "chain_ladder",
+            "bornhuetter_ferguson",
+            "mack",
+        )
+
+    def test_two_method_subset(self):
+        params = RunParameters(
+            methods=("bornhuetter_ferguson", "mack"),
+            apriori_loss_ratios=SMALL_APRIORIS,
+        )
+        rs = run_methods(SMALL_TRIANGLE, params)
+        assert tuple(m.method for m in rs.method_results) == ("bornhuetter_ferguson", "mack")
+
+    def test_request_order_is_preserved(self):
+        params = RunParameters(methods=("mack", "chain_ladder"))
+        rs = run_methods(SMALL_TRIANGLE, params)
+        assert tuple(m.method for m in rs.method_results) == ("mack", "chain_ladder")
+
+    def test_cl_and_mack_need_no_aprioris(self):
+        rs = run_methods(SMALL_TRIANGLE, RunParameters(methods=("chain_ladder", "mack")))
+        assert len(rs.method_results) == 2
+
+    def test_aprioris_recorded_in_lineage_verbatim(self):
+        params = RunParameters(
+            methods=("bornhuetter_ferguson",), apriori_loss_ratios=SMALL_APRIORIS
+        )
+        rs = run_methods(SMALL_TRIANGLE, params)
+        assert rs.lineage.parameters.apriori_loss_ratios == SMALL_APRIORIS
+        assert rs.lineage.parameters == params
+
+    def test_unused_aprioris_without_bf_are_permitted_and_recorded(self):
+        params = RunParameters(methods=("chain_ladder",), apriori_loss_ratios=SMALL_APRIORIS)
+        rs = run_methods(SMALL_TRIANGLE, params)
+        assert rs.lineage.parameters.apriori_loss_ratios == SMALL_APRIORIS
+
+
+class TestMissingApriori:
+    def test_bf_without_aprioris_raises_naming_all_origins(self):
+        with pytest.raises(MissingAprioriError) as exc_info:
+            run_methods(SMALL_TRIANGLE, RunParameters(methods=("bornhuetter_ferguson",)))
+        assert exc_info.value.missing_origins == ("2021", "2022", "2023")
+        for origin in ("2021", "2022", "2023"):
+            assert origin in str(exc_info.value)
+
+    def test_bf_with_partial_aprioris_names_exactly_the_missing(self):
+        params = RunParameters(
+            methods=("bornhuetter_ferguson",), apriori_loss_ratios=SMALL_APRIORIS[:1]
+        )
+        with pytest.raises(MissingAprioriError) as exc_info:
+            run_methods(SMALL_TRIANGLE, params)
+        assert exc_info.value.missing_origins == ("2022", "2023")
+        assert "2021" not in str(exc_info.value)
+
+    def test_missing_apriori_error_is_a_value_error(self):
+        assert issubclass(MissingAprioriError, ValueError)
+
+    def test_duplicate_apriori_origin_rejected(self):
+        params = RunParameters(
+            methods=("bornhuetter_ferguson",),
+            apriori_loss_ratios=SMALL_APRIORIS + (SMALL_APRIORIS[0],),
+        )
+        with pytest.raises(InvalidAprioriError, match="2021") as exc_info:
+            run_methods(SMALL_TRIANGLE, params)
+        assert exc_info.value.origins == ("2021",)
+
+    def test_unknown_apriori_origin_rejected(self):
+        stranger = AprioriLossRatio(origin="1999", loss_ratio=0.9, exposure=200.0)
+        params = RunParameters(
+            methods=("bornhuetter_ferguson",),
+            apriori_loss_ratios=SMALL_APRIORIS + (stranger,),
+        )
+        with pytest.raises(InvalidAprioriError, match="1999") as exc_info:
+            run_methods(SMALL_TRIANGLE, params)
+        assert exc_info.value.origins == ("1999",)
+
+    def test_invalid_apriori_error_is_a_value_error(self):
+        # Same envelope family as the other boundary a-priori error.
+        assert issubclass(InvalidAprioriError, ValueError)
+
+
+class TestBornhuetterFerguson:
+    def test_bf_fully_developed_origin_has_zero_ibnr(self):
+        rs = run_methods(SMALL_TRIANGLE, ALL_METHODS)
+        bf = rs.method_results[1]
+        assert bf.origin_results[0].ultimate == 175.0
+        assert bf.origin_results[0].ibnr == 0.0
+
+    def test_bf_values_are_plain_python_floats(self):
+        rs = run_methods(SMALL_TRIANGLE, ALL_METHODS)
+        bf = rs.method_results[1]
+        for r in bf.origin_results:
+            assert type(r.ultimate) is float
+            assert type(r.ibnr) is float
+
+    def test_bf_single_development_period_degenerates(self):
+        one_dev = Triangle(
+            kind="paid",
+            origin_periods=("2023",),
+            development_periods=("12",),
+            cells=((100.0,),),
+        )
+        params = RunParameters(
+            methods=("bornhuetter_ferguson",),
+            apriori_loss_ratios=(
+                AprioriLossRatio(origin="2023", loss_ratio=0.9, exposure=200.0),
+            ),
+        )
+        rs = run_methods(one_dev, params)
+        bf = rs.method_results[0]
+        assert bf.development_factors == ()
+        assert bf.origin_results[0].ultimate == 100.0
+        assert bf.origin_results[0].ibnr == 0.0
+
+
+class TestMackFieldsDiscipline:
+    def test_mack_results_carry_std_err_and_range(self):
+        rs = run_methods(SMALL_TRIANGLE, RunParameters(methods=("mack",)))
+        mack = rs.method_results[0]
+        assert mack.total_mack_std_err is not None
+        for r in mack.origin_results:
+            assert r.mack_std_err is not None
+            assert r.reserve_low == r.ibnr - r.mack_std_err
+            assert r.reserve_high == r.ibnr + r.mack_std_err
+
+    def test_cl_and_bf_results_carry_no_mack_fields(self):
+        rs = run_methods(SMALL_TRIANGLE, ALL_METHODS)
+        for method in rs.method_results[:2]:  # chain_ladder, bornhuetter_ferguson
+            assert method.total_mack_std_err is None
+            for r in method.origin_results:
+                assert r.mack_std_err is None
+                assert r.reserve_low is None
+                assert r.reserve_high is None
+
+    def test_mack_single_development_period_degenerates(self):
+        one_dev = Triangle(
+            kind="paid",
+            origin_periods=("2023",),
+            development_periods=("12",),
+            cells=((100.0,),),
+        )
+        rs = run_methods(one_dev, RunParameters(methods=("mack",)))
+        mack = rs.method_results[0]
+        assert mack.development_factors == ()
+        assert mack.origin_results[0].ultimate == 100.0
+        assert mack.origin_results[0].ibnr == 0.0
+        assert mack.origin_results[0].mack_std_err == 0.0
+        assert mack.origin_results[0].reserve_low == 0.0
+        assert mack.origin_results[0].reserve_high == 0.0
+        assert mack.total_mack_std_err == 0.0
 
 
 class TestBoundaryValidation:

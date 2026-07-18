@@ -96,6 +96,10 @@ cd engine && uv run ruff check . && uv run lint-imports
 
 `run_methods` (Story 2.2) is the engine's single computation entry point: it validates the Triangle at the boundary, runs Chain Ladder via chainladder 0.9.2, and returns a `ResultSet` — camelCase-on-the-wire Pydantic contract (AD-10) carrying LDFs, ultimates, and IBNR per Origin Period plus a `Lineage` (engine semver, chainladder version, canonical Triangle hash, all parameters) sufficient to reproduce the run (AD-11). Correctness is gated by Taylor-Ashe golden tests: exact equality on the pinned CI platform (linux/amd64), 1e-8 relative tolerance cross-platform, cross-checked against published Mack (1993) values, with a re-derivation test that replays a stored Lineage.
 
+All three v1 Methods (Story 2.3) run from that same single call: any subset of `{chain_ladder, bornhuetter_ferguson, mack}` in one `run_methods` invocation produces one `ResultSet`. BF takes per-Origin-Period `AprioriLossRatio{origin, lossRatio, exposure}` parameters — the expected-ultimate multiplication happens inside the engine (AD-1: no reserve arithmetic outside it), and an incomplete a-priori set fails at the boundary with a `MissingAprioriError` naming the missing Origin Periods. Mack emits per-origin standard errors, an engine-computed ±1-SE reserve range, and the total Mack standard error, using `sigma_interpolation="mack"` so the Taylor-Ashe golden tests reproduce Mack (1993) published values exactly.
+
+`compute_diagnostics(triangle, result_set, run_id)` (Story 2.4) derives the four FR-7 Diagnostics into a `DiagnosticsBundle` (camelCase-on-the-wire Pydantic contract, AD-10): LDF stability by Development Period, actual-vs-expected on the Latest Diagonal, CL-vs-BF divergence by Origin Period (present only when both Methods ran, `null` otherwise), and residual heatmap data. Every element carries a stable Diagnostic ID `dx:{runId}:{kind}:{key}` with `kind ∈ {ldf_stability, ave, cl_bf_divergence, residual}`, minted only here; `resolve_diagnostic(bundle, id)` looks an element up by dict walk (IDs are opaque and never string-parsed). Golden-tested against Taylor-Ashe with the same two-tier discipline (exact on linux/amd64, 1e-8 elsewhere) and independent identities for the A-vs-E and residual values.
+
 ### Run
 
 ```bash
@@ -103,7 +107,19 @@ npm run dev        # Next.js at http://localhost:3000
 npx convex dev     # Convex function sync (separate terminal)
 ```
 
-The engine service (`uv run uvicorn ...`) arrives in Story 2.5; until then the Python plane is verified by its tests.
+`engine_service` (Story 2.5, AD-12) is the FastAPI imperative shell over the pure core: `POST /validate` returns the typed `ValidationReport`, and `POST /runs` composes `run_methods` + `compute_diagnostics` into `{runId, resultSet, diagnosticsBundle}`. Every endpoint requires the shared bearer secret (`Authorization: Bearer $ENGINE_SERVICE_SECRET`) — engine_service performs no user auth, holds no state between requests (AD-3), and never calls Convex or Clerk. The Convex run ID is the idempotency key: identical retried requests return byte-identical responses because the core is pure (AD-7), so no server-side cache exists. Errors use the `{code, message, details?}` envelope, with cell-level validation findings passed through intact. Run it locally with the secret in the environment:
+
+```bash
+cd engine && ENGINE_SERVICE_SECRET=dev-secret uv run uvicorn engine_service.app:create_app --factory
+```
+
+### Cross-runtime schema contract (Story 2.6, AD-10)
+
+The `ResultSet`/`DiagnosticsBundle` shapes are single-sourced from the Pydantic models. `scripts/export_schema.py` exports their JSON Schema (camelCase, `by_alias=True`) to the repo-root `schemas/` directory; `convex/lib/engineContract.ts` holds the hand-authored Convex `v` validators + inferred TS types for the same shapes (Epic 4 uses them to validate a `ResultSet` before persisting it). Two CI guards keep the runtimes from silently drifting: `engine/tests/test_schema_contract.py` (pytest) byte-compares the committed `schemas/*.json` against a fresh export, and `tests/engine-contract.test.ts` (vitest) structurally diffs the Convex validators against those schemas. Both ride the existing pytest/vitest CI steps — no separate CI job. When you change a `ResultSet`/`DiagnosticsBundle` field: re-run the export, update the Convex validator, and both checks stay green.
+
+```bash
+cd engine && uv run python -m scripts.export_schema   # regenerate schemas/*.json
+```
 
 ### Tests
 

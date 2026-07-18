@@ -5,8 +5,26 @@ network, environment, clock access, or logging side effects — enforced
 by the import-linter contracts in pyproject.toml.
 """
 
-from reserving_engine.methods import InvalidTriangleError, run_methods
+from reserving_engine.diagnostics import (
+    AveElement,
+    ClBfDivergenceElement,
+    DiagnosticsBundle,
+    LdfStabilityElement,
+    LinkRatio,
+    ResidualElement,
+    UnknownDiagnosticIdError,
+    compute_diagnostics,
+    diagnostic_id,
+    resolve_diagnostic,
+)
+from reserving_engine.methods import (
+    InvalidAprioriError,
+    InvalidTriangleError,
+    MissingAprioriError,
+    run_methods,
+)
 from reserving_engine.resultset import (
+    AprioriLossRatio,
     DevelopmentFactor,
     Lineage,
     MethodResult,
@@ -28,17 +46,30 @@ from reserving_engine.version import ENGINE_VERSION
 
 __all__ = [
     "ENGINE_VERSION",
+    "AprioriLossRatio",
+    "AveElement",
+    "ClBfDivergenceElement",
     "DevelopmentFactor",
+    "DiagnosticsBundle",
+    "InvalidAprioriError",
     "InvalidTriangleError",
+    "LdfStabilityElement",
     "Lineage",
+    "LinkRatio",
     "MethodResult",
+    "MissingAprioriError",
     "OriginResult",
+    "ResidualElement",
     "ResultSet",
     "RunParameters",
     "Triangle",
+    "UnknownDiagnosticIdError",
     "ValidationFinding",
     "ValidationReport",
     "canonical_triangle_json",
+    "compute_diagnostics",
+    "diagnostic_id",
+    "resolve_diagnostic",
     "run_methods",
     "triangle_hash",
     "validate_triangle",
