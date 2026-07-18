@@ -71,9 +71,9 @@ development_status:
   3-3-period-confirmation-and-triangle-acceptance: done
   epic-3-retrospective: optional
 
-  epic-4: backlog
-  4-1-run-configuration-with-a-priori-grid: backlog
-  4-2-durable-run-orchestration-and-resultset-persistence: backlog
+  epic-4: in-progress
+  4-1-run-configuration-with-a-priori-grid: review
+  4-2-durable-run-orchestration-and-resultset-persistence: review
   4-3-run-detail-with-step-rail-and-live-status: backlog
   4-4-results-tab-with-provenance-popover: backlog
   4-5-diagnostics-review-panels: backlog

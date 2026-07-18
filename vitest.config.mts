@@ -35,7 +35,16 @@ export default defineConfig({
           },
           server: {
             deps: {
-              inline: ["convex-test"],
+              // convex-test inlined so its dynamic module loading works. The
+              // workflow/workpool component test helpers (@convex-dev/*/test)
+              // use import.meta.glob over their own src, so they must be
+              // inlined too or vite externalizes them and registration breaks
+              // (Story 4.2 — durable Run orchestration).
+              inline: [
+                "convex-test",
+                "@convex-dev/workflow",
+                "@convex-dev/workpool",
+              ],
             },
           },
         },

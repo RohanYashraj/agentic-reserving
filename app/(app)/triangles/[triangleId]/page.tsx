@@ -84,6 +84,13 @@ export default function TriangleDetailPage() {
 
           {triangle.status === "validated" && triangle.acceptedTriangle ? (
             <div className="mt-6 space-y-6">
+              <Link
+                href={`/triangles/${triangleId}/run`}
+                className="inline-block w-fit rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+              >
+                Run methods
+              </Link>
+
               {triangle.periodMeta && (
                 <p className="text-sm text-muted-foreground">
                   Origin periods: {triangle.periodMeta.originGranularity} ·
