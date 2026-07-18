@@ -1,0 +1,52 @@
+{
+  "description": "An immutable cumulative claims triangle.\n\nRows follow ``origin_periods`` (oldest first); columns follow\n``development_periods`` (earliest age first). ``cells`` is a full\nrectangle; ``None`` means the cell holds no value.",
+  "properties": {
+    "cells": {
+      "items": {
+        "items": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "type": "array"
+      },
+      "title": "Cells",
+      "type": "array"
+    },
+    "development_periods": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Development Periods",
+      "type": "array"
+    },
+    "kind": {
+      "enum": [
+        "paid",
+        "incurred"
+      ],
+      "title": "Kind",
+      "type": "string"
+    },
+    "origin_periods": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Origin Periods",
+      "type": "array"
+    }
+  },
+  "required": [
+    "kind",
+    "origin_periods",
+    "development_periods",
+    "cells"
+  ],
+  "title": "Triangle",
+  "type": "object"
+}

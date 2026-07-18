@@ -18,15 +18,23 @@ Never hand-edit the emitted files — they are generated artifacts.
 import json
 from pathlib import Path
 
-from reserving_engine import DiagnosticsBundle, ResultSet
+from reserving_engine import DiagnosticsBundle, ResultSet, Triangle, ValidationReport
 
 # scripts/export_schema.py → parents[2] is the repo root.
 SCHEMAS_DIR = Path(__file__).resolve().parents[2] / "schemas"
 
 # model → output filename (kebab reads naturally on the product plane).
+# Triangle (the /validate + /runs request body) and ValidationReport (the
+# /validate response) join the drift-checked contract in Story 3.2 — both now
+# cross the Convex↔engine boundary. Note Triangle's wire keys are snake_case
+# (``origin_periods``/``development_periods``): unlike ResultSet/
+# DiagnosticsBundle it has no camelCase alias generator. The Convex validators
+# match that snake_case exactly; the inconsistency is tracked in deferred-work.
 _TARGETS = {
     ResultSet: "resultset.schema.json",
     DiagnosticsBundle: "diagnostics-bundle.schema.json",
+    Triangle: "triangle.schema.json",
+    ValidationReport: "validation-report.schema.json",
 }
 
 

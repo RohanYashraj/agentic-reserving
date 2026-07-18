@@ -136,7 +136,69 @@ export const diagnosticsBundleValidator = v.object({
   residuals: v.array(residualElementValidator),
 });
 
+// --- Triangle (the /validate + /runs request body) -----------------------
+
+/**
+ * Wire shape of the engine `Triangle`. Story 3.2 constructs this from an
+ * uploaded CSV/XLSX (see `triangleParse.ts`) and POSTs it to `/validate`.
+ *
+ * ⚠️ Keys here are **snake_case** (`origin_periods`/`development_periods`) —
+ * unlike ResultSet/DiagnosticsBundle above. The engine `Triangle` model
+ * (`reserving_engine/triangle.py`) uses `ConfigDict(frozen=True)` with **no**
+ * camelCase alias generator, so its JSON Schema — and therefore the wire
+ * `/validate` accepts — is snake_case. The drift check (`engine-contract.test.ts`)
+ * confirms this against the committed `triangle.schema.json`. The camelCase
+ * inconsistency vs the rest of the contract is tracked in deferred-work.
+ */
+export const triangleValidator = v.object({
+  kind: v.union(v.literal("paid"), v.literal("incurred")),
+  origin_periods: v.array(v.string()),
+  development_periods: v.array(v.string()),
+  // A cell is a number or `null` (the unobserved future / a hole).
+  cells: v.array(v.array(v.union(v.number(), v.null()))),
+});
+
+// --- ValidationReport (the /validate response) ---------------------------
+
+/** The four cell-level finding codes — matches `validation.py` `FindingCode`. */
+const findingCodeValidator = v.union(
+  v.literal("shape"),
+  v.literal("paid_monotonicity"),
+  v.literal("missing_cell"),
+  v.literal("degenerate_factor"),
+);
+
+const validationFindingValidator = v.object({
+  origin: v.string(),
+  dev: v.string(),
+  reason: v.string(),
+  code: findingCodeValidator,
+});
+
+export const validationReportValidator = v.object({
+  valid: v.boolean(),
+  findings: v.array(validationFindingValidator),
+});
+
+// --- CanonicalizeResponse (the /canonicalize response, Story 3.3) ---------
+
+/**
+ * The canonical-triangle-JSON sha256 — *the* Lineage Triangle hash (AD-11),
+ * ENGINE-computed (`reserving_engine.triangle_hash`) and returned by
+ * `POST /canonicalize`. camelCase `triangleHash`, matching `Lineage.triangleHash`.
+ * A one-field wire model (an `engine_service` response, not a `reserving_engine`
+ * core model), so it is validated Convex-side without a `schemas/*.json` entry —
+ * there is no meaningful drift surface on `{ triangleHash: string }`.
+ */
+export const canonicalizeResponseValidator = v.object({
+  triangleHash: v.string(),
+});
+
 // --- Inferred TS types (derived from the validators, drift-checked) ------
 
 export type ResultSet = Infer<typeof resultSetValidator>;
 export type DiagnosticsBundle = Infer<typeof diagnosticsBundleValidator>;
+export type Triangle = Infer<typeof triangleValidator>;
+export type ValidationReport = Infer<typeof validationReportValidator>;
+export type ValidationFinding = Infer<typeof validationFindingValidator>;
+export type CanonicalizeResponse = Infer<typeof canonicalizeResponseValidator>;

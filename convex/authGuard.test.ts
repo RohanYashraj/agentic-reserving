@@ -37,6 +37,28 @@ const realModulesEager: Record<string, Record<string, unknown>> =
 const publicFunctionArgs: Record<string, Record<string, unknown>> = {
   // "module:functionName": { ...minimally valid args }
   "auditLogs:verifyChain": { workspaceId: "org_test" },
+  "triangles:generateUploadUrl": { workspaceId: "org_test" },
+  // storageId is injected at call time from a real ctx.storage.store below —
+  // Convex validates v.id("_storage") before the guard runs, so a fake id
+  // string would fail validation instead of reaching requireMember.
+  "triangles:createFromUpload": {
+    workspaceId: "org_test",
+    label: "paid",
+    filename: "triangle.csv",
+  },
+  "triangles:listByWorkspace": { workspaceId: "org_test" },
+  // triangleId is a v.id("triangles") validated before the guard runs — a real
+  // row id is injected at call time (like createFromUpload's storageId).
+  "triangles:validateTriangle": { workspaceId: "org_test" },
+  // acceptTriangle validates its confirmed-period/periodMeta args before the
+  // guard runs; supply minimal label arrays here, triangleId injected.
+  "triangles:acceptTriangle": {
+    workspaceId: "org_test",
+    confirmedOriginPeriods: ["2019"],
+    confirmedDevelopmentPeriods: ["12"],
+    periodMeta: { originGranularity: "annual", developmentInterval: "months" },
+  },
+  "triangles:getById": { workspaceId: "org_test" },
 };
 
 type Harness = TestConvex<SchemaDefinition<GenericSchema, boolean>>;
@@ -144,8 +166,42 @@ describe("auth-guard enumeration (NFR-3)", () => {
 
   test("every public function rejects unauthenticated calls", async () => {
     const t = convexTest(schema, realModules);
+    // Some functions (triangles:createFromUpload) take a v.id("_storage")
+    // that must be a genuine stored id to pass arg validation before the
+    // guard runs. Seed one real blob and inject its id per call.
+    const storageId = await t.run(
+      async (ctx) => await ctx.storage.store(new Blob(["seed"])),
+    );
+    // validateTriangle needs a real v.id("triangles"); seed a minimal row.
+    const triangleId = await t.run(
+      async (ctx) =>
+        await ctx.db.insert("triangles", {
+          workspaceId: "org_test",
+          label: "paid",
+          status: "pending_validation",
+          format: "csv",
+          storageId,
+          rawFileHash: "seedhash",
+          filename: "triangle.csv",
+          uploadedBy: "user_seed",
+          uploadedAt: "2026-07-18T00:00:00.000Z",
+        }),
+    );
+    const argsFor = (path: string): Record<string, unknown> => {
+      if (path === "triangles:createFromUpload") {
+        return { ...publicFunctionArgs[path], storageId };
+      }
+      if (
+        path === "triangles:validateTriangle" ||
+        path === "triangles:acceptTriangle" ||
+        path === "triangles:getById"
+      ) {
+        return { ...publicFunctionArgs[path], triangleId };
+      }
+      return publicFunctionArgs[path];
+    };
     for (const fn of publicFunctions) {
-      await assertRejectsUnauthenticated(t, fn, publicFunctionArgs[fn.path]);
+      await assertRejectsUnauthenticated(t, fn, argsFor(fn.path));
     }
   });
 

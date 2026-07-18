@@ -51,3 +51,18 @@ class RunResponse(BaseModel):
     run_id: str
     result_set: ResultSet
     diagnostics_bundle: DiagnosticsBundle
+
+
+class CanonicalizeResponse(BaseModel):
+    """``POST /canonicalize`` response (Story 3.3). The single value is the
+    canonical-triangle-JSON sha256 — *the* Lineage Triangle hash (AD-11),
+    computed by ``reserving_engine.triangle_hash``. The request reuses
+    ``ValidateRequest`` (``{triangle}``); the Triangle model's structural
+    validation is the backstop (duplicate/empty labels, NaN/Inf → 422). Wire
+    key ``triangleHash`` (camelCase via ``_MODEL_CONFIG``), matching
+    ``Lineage.triangleHash`` so the acceptance-time hash and the run-time
+    Lineage hash are the same string."""
+
+    model_config = _MODEL_CONFIG
+
+    triangle_hash: str

@@ -16,6 +16,8 @@ import { v } from "convex/values";
 import {
   diagnosticsBundleValidator,
   resultSetValidator,
+  triangleValidator,
+  validationReportValidator,
 } from "../convex/lib/engineContract";
 import {
   CanonicalType,
@@ -30,6 +32,8 @@ function readSchema(file: string): Record<string, unknown> {
 
 const resultSetSchema = readSchema("resultset.schema.json");
 const diagnosticsBundleSchema = readSchema("diagnostics-bundle.schema.json");
+const triangleSchema = readSchema("triangle.schema.json");
+const validationReportSchema = readSchema("validation-report.schema.json");
 
 describe("AD-10 cross-runtime drift check", () => {
   it("ResultSet: committed JSON Schema matches the Convex validator", () => {
@@ -44,6 +48,23 @@ describe("AD-10 cross-runtime drift check", () => {
       diagnosticsBundleSchema,
     );
     const fromValidator = validatorToCanonical(diagnosticsBundleValidator);
+    expect(diffCanonical(fromSchema, fromValidator)).toEqual([]);
+  });
+
+  it("Triangle: committed JSON Schema matches the Convex validator", () => {
+    // Triangle's wire keys are snake_case (no camelCase alias generator on
+    // the engine model); the validator matches that exactly.
+    const fromSchema = jsonSchemaToCanonical(triangleSchema, triangleSchema);
+    const fromValidator = validatorToCanonical(triangleValidator);
+    expect(diffCanonical(fromSchema, fromValidator)).toEqual([]);
+  });
+
+  it("ValidationReport: committed JSON Schema matches the Convex validator", () => {
+    const fromSchema = jsonSchemaToCanonical(
+      validationReportSchema,
+      validationReportSchema,
+    );
+    const fromValidator = validatorToCanonical(validationReportValidator);
     expect(diffCanonical(fromSchema, fromValidator)).toEqual([]);
   });
 });

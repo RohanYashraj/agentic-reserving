@@ -30,6 +30,13 @@ def test_committed_schema_matches_models(filename: str, content: str):
 
 @pytest.mark.parametrize("filename", list(_SCHEMAS), ids=list(_SCHEMAS))
 def test_committed_schema_is_versioned_json(filename: str):
-    """Cheap sanity guard: the file parses and carries schemaVersion 1.0.0."""
+    """Cheap sanity guard: the file parses; versioned models carry 1.0.0.
+
+    ResultSet/DiagnosticsBundle carry a ``schemaVersion`` field; the
+    request/response contracts added in Story 3.2 (Triangle, ValidationReport)
+    do not — so the version assertion only applies where the field exists.
+    """
     schema = json.loads((SCHEMAS_DIR / filename).read_text(encoding="utf-8"))
-    assert schema["properties"]["schemaVersion"]["default"] == "1.0.0"
+    properties = schema["properties"]
+    if "schemaVersion" in properties:
+        assert properties["schemaVersion"]["default"] == "1.0.0"
