@@ -1,0 +1,53 @@
+"""engine_service wire models (request / response).
+
+Reuse ``reserving_engine``'s shared alias config (``_MODEL_CONFIG``) so
+this boundary speaks the same camelCase contract as the engine models
+(AD-10) — no second config to drift from. The response nests the
+engine's ``ResultSet`` / ``DiagnosticsBundle`` unchanged; those already
+carry their own aliases.
+"""
+
+from pydantic import BaseModel, field_validator
+
+from reserving_engine import DiagnosticsBundle, ResultSet, RunParameters, Triangle
+from reserving_engine.resultset import _MODEL_CONFIG
+
+
+class ValidateRequest(BaseModel):
+    """``POST /validate`` body. No runId — validation mints no IDs and is
+    naturally idempotent."""
+
+    model_config = _MODEL_CONFIG
+
+    triangle: Triangle
+
+
+class RunRequest(BaseModel):
+    """``POST /runs`` body. ``run_id`` is the AD-7 idempotency key and the
+    value handed to ``compute_diagnostics`` to mint Diagnostic IDs (2.4)."""
+
+    model_config = _MODEL_CONFIG
+
+    run_id: str
+    triangle: Triangle
+    parameters: RunParameters | None = None
+
+    @field_validator("run_id")
+    @classmethod
+    def _non_empty_run_id(cls, value: str) -> str:
+        if not value:
+            raise ValueError("run_id must not be empty")
+        return value
+
+
+class RunResponse(BaseModel):
+    """``POST /runs`` response. ``run_id`` is echoed back — the async-upgrade
+    seam (a future ``202 + HMAC callback`` returns the same runId, then
+    posts ``{runId, resultSet, diagnosticsBundle}``; additive, not a
+    rewrite)."""
+
+    model_config = _MODEL_CONFIG
+
+    run_id: str
+    result_set: ResultSet
+    diagnostics_bundle: DiagnosticsBundle

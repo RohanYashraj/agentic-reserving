@@ -107,7 +107,11 @@ npm run dev        # Next.js at http://localhost:3000
 npx convex dev     # Convex function sync (separate terminal)
 ```
 
-The engine service (`uv run uvicorn ...`) arrives in Story 2.5; until then the Python plane is verified by its tests.
+`engine_service` (Story 2.5, AD-12) is the FastAPI imperative shell over the pure core: `POST /validate` returns the typed `ValidationReport`, and `POST /runs` composes `run_methods` + `compute_diagnostics` into `{runId, resultSet, diagnosticsBundle}`. Every endpoint requires the shared bearer secret (`Authorization: Bearer $ENGINE_SERVICE_SECRET`) — engine_service performs no user auth, holds no state between requests (AD-3), and never calls Convex or Clerk. The Convex run ID is the idempotency key: identical retried requests return byte-identical responses because the core is pure (AD-7), so no server-side cache exists. Errors use the `{code, message, details?}` envelope, with cell-level validation findings passed through intact. Run it locally with the secret in the environment:
+
+```bash
+cd engine && ENGINE_SERVICE_SECRET=dev-secret uv run uvicorn engine_service.app:create_app --factory
+```
 
 ### Tests
 

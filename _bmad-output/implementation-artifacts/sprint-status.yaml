@@ -61,7 +61,7 @@ development_status:
   2-2-chain-ladder-with-resultset-lineage-and-golden-test: review
   2-3-bornhuetter-ferguson-and-mack-methods: review
   2-4-diagnostics-computation-with-diagnostic-ids: review
-  2-5-engine-service-fastapi-shell-with-service-auth: backlog
+  2-5-engine-service-fastapi-shell-with-service-auth: review
   2-6-cross-runtime-schema-contract-and-ci-drift-check: backlog
   epic-2-retrospective: optional
 
