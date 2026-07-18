@@ -113,6 +113,14 @@ npx convex dev     # Convex function sync (separate terminal)
 cd engine && ENGINE_SERVICE_SECRET=dev-secret uv run uvicorn engine_service.app:create_app --factory
 ```
 
+### Cross-runtime schema contract (Story 2.6, AD-10)
+
+The `ResultSet`/`DiagnosticsBundle` shapes are single-sourced from the Pydantic models. `scripts/export_schema.py` exports their JSON Schema (camelCase, `by_alias=True`) to the repo-root `schemas/` directory; `convex/lib/engineContract.ts` holds the hand-authored Convex `v` validators + inferred TS types for the same shapes (Epic 4 uses them to validate a `ResultSet` before persisting it). Two CI guards keep the runtimes from silently drifting: `engine/tests/test_schema_contract.py` (pytest) byte-compares the committed `schemas/*.json` against a fresh export, and `tests/engine-contract.test.ts` (vitest) structurally diffs the Convex validators against those schemas. Both ride the existing pytest/vitest CI steps — no separate CI job. When you change a `ResultSet`/`DiagnosticsBundle` field: re-run the export, update the Convex validator, and both checks stay green.
+
+```bash
+cd engine && uv run python -m scripts.export_schema   # regenerate schemas/*.json
+```
+
 ### Tests
 
 ```bash
