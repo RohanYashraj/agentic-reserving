@@ -23,4 +23,25 @@ export default defineSchema({
     .index("by_workspace_seq", ["workspaceId", "seq"])
     // Webhook replay idempotency.
     .index("by_workspace_dedupe", ["workspaceId", "dedupeId"]),
+
+  // Uploaded Triangles (FR-1). Story 3.1 stores the raw upload, its raw-file
+  // sha256 (duplicate detection — NOT the canonical-triangle-JSON Lineage
+  // hash, which 3.3 computes at acceptance), and lists them per Workspace.
+  // The `status` union is intentionally narrow here (only pending_validation);
+  // Stories 3.2/3.3 widen it (validated, accepted, …) — a non-breaking change.
+  triangles: defineTable({
+    workspaceId: v.string(), // Clerk org ID — the Workspace
+    label: v.union(v.literal("paid"), v.literal("incurred")),
+    status: v.union(v.literal("pending_validation")),
+    format: v.union(v.literal("csv"), v.literal("xlsx")),
+    storageId: v.id("_storage"),
+    rawFileHash: v.string(), // sha256 lowercase hex of the raw uploaded bytes
+    filename: v.string(),
+    uploadedBy: v.string(), // Clerk user id (identity.subject)
+    uploadedAt: v.string(), // ISO-8601 UTC
+  })
+    // Library list, newest-first per Workspace.
+    .index("by_workspace", ["workspaceId"])
+    // Duplicate lookup + OCC-serialized insert-if-absent.
+    .index("by_workspace_hash", ["workspaceId", "rawFileHash"]),
 });

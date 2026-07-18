@@ -37,6 +37,16 @@ const realModulesEager: Record<string, Record<string, unknown>> =
 const publicFunctionArgs: Record<string, Record<string, unknown>> = {
   // "module:functionName": { ...minimally valid args }
   "auditLogs:verifyChain": { workspaceId: "org_test" },
+  "triangles:generateUploadUrl": { workspaceId: "org_test" },
+  // storageId is injected at call time from a real ctx.storage.store below —
+  // Convex validates v.id("_storage") before the guard runs, so a fake id
+  // string would fail validation instead of reaching requireMember.
+  "triangles:createFromUpload": {
+    workspaceId: "org_test",
+    label: "paid",
+    filename: "triangle.csv",
+  },
+  "triangles:listByWorkspace": { workspaceId: "org_test" },
 };
 
 type Harness = TestConvex<SchemaDefinition<GenericSchema, boolean>>;
@@ -144,8 +154,18 @@ describe("auth-guard enumeration (NFR-3)", () => {
 
   test("every public function rejects unauthenticated calls", async () => {
     const t = convexTest(schema, realModules);
+    // Some functions (triangles:createFromUpload) take a v.id("_storage")
+    // that must be a genuine stored id to pass arg validation before the
+    // guard runs. Seed one real blob and inject its id per call.
+    const storageId = await t.run(
+      async (ctx) => await ctx.storage.store(new Blob(["seed"])),
+    );
+    const argsFor = (path: string): Record<string, unknown> =>
+      path === "triangles:createFromUpload"
+        ? { ...publicFunctionArgs[path], storageId }
+        : publicFunctionArgs[path];
     for (const fn of publicFunctions) {
-      await assertRejectsUnauthenticated(t, fn, publicFunctionArgs[fn.path]);
+      await assertRejectsUnauthenticated(t, fn, argsFor(fn.path));
     }
   });
 
