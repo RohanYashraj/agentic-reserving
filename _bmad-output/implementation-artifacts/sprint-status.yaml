@@ -66,9 +66,9 @@ development_status:
   epic-2-retrospective: optional
 
   epic-3: in-progress
-  3-1-triangle-upload-with-duplicate-detection: review
-  3-2-upload-wizard-validation-with-flagged-grid-preview: review
-  3-3-period-confirmation-and-triangle-acceptance: review
+  3-1-triangle-upload-with-duplicate-detection: done
+  3-2-upload-wizard-validation-with-flagged-grid-preview: done
+  3-3-period-confirmation-and-triangle-acceptance: done
   epic-3-retrospective: optional
 
   epic-4: backlog

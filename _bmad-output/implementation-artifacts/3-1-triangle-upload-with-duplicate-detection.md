@@ -4,7 +4,7 @@ baseline_commit: 87601a9c1529fb265ad892a0a038dafb96768741
 
 # Story 3.1: Triangle Upload with Duplicate Detection
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 

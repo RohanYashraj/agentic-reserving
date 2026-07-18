@@ -26,9 +26,14 @@ export default function TrianglesPage() {
   const [copiedHash, setCopiedHash] = useState<string | null>(null);
 
   async function copyHash(hash: string) {
-    await navigator.clipboard.writeText(hash);
-    setCopiedHash(hash);
-    window.setTimeout(() => setCopiedHash(null), 1500);
+    // clipboard is unavailable in insecure contexts / can reject on deny.
+    try {
+      await navigator.clipboard.writeText(hash);
+      setCopiedHash(hash);
+      window.setTimeout(() => setCopiedHash(null), 1500);
+    } catch {
+      /* no-op: copy unsupported/denied */
+    }
   }
 
   return (

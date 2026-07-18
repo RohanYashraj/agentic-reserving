@@ -52,18 +52,19 @@ function errorMessage(error: unknown): string {
     : "Something went wrong. Please try again.";
 }
 
-/** Whether a thrown ConvexError is an engine-availability problem (vs a parse issue). */
+/**
+ * Whether a thrown ConvexError is an engine-AVAILABILITY problem (unreachable /
+ * unconfigured) — those warrant a "service unavailable" panel with Retry. Engine
+ * DOMAIN errors (`engine.bad_request`, `engine.triangle_invalid`, …) are data
+ * problems, not availability, so they are deliberately excluded — retrying them
+ * just loops on a deterministic failure; they surface as a fix-the-data message.
+ */
 function isEngineError(error: unknown): boolean {
   const code =
     error instanceof ConvexError
       ? (error.data as { code?: unknown })?.code
       : undefined;
-  return (
-    typeof code === "string" &&
-    (code.startsWith("engine.") ||
-      code === "ENGINE_UNAVAILABLE" ||
-      code === "ENGINE_UNCONFIGURED")
-  );
+  return code === "ENGINE_UNAVAILABLE" || code === "ENGINE_UNCONFIGURED";
 }
 
 export function UploadWizard({ workspaceId }: { workspaceId: string }) {
@@ -248,6 +249,7 @@ export function UploadWizard({ workspaceId }: { workspaceId: string }) {
           triangleId={triangleId}
           triangle={result.triangle}
           onAccept={acceptTriangle}
+          onReset={resetToFile}
         />
       )}
     </section>
@@ -280,6 +282,7 @@ function PeriodsStep({
   triangleId,
   triangle,
   onAccept,
+  onReset,
 }: {
   workspaceId: string;
   triangleId: Id<"triangles">;
@@ -287,9 +290,11 @@ function PeriodsStep({
   onAccept: (args: {
     workspaceId: string;
     triangleId: Id<"triangles">;
-    confirmedTriangle: ValidateResult["triangle"];
+    confirmedOriginPeriods: string[];
+    confirmedDevelopmentPeriods: string[];
     periodMeta: { originGranularity: string; developmentInterval: string };
   }) => Promise<{ status: "accepted"; triangleId: string; triangleHash: string }>;
+  onReset: () => void;
 }) {
   const detection = useMemo(
     () => detectPeriods(triangle.origin_periods, triangle.development_periods),
@@ -323,15 +328,13 @@ function PeriodsStep({
     setAccepting(true);
     setAcceptError(null);
     try {
+      // Send only the confirmed LABELS + granularity — never cell values. The
+      // server re-parses the stored file for the numbers (chain of custody).
       const res = await onAccept({
         workspaceId,
         triangleId,
-        confirmedTriangle: {
-          kind: triangle.kind,
-          origin_periods: originLabels.map((l) => l.trim()),
-          development_periods: devLabels.map((l) => l.trim()),
-          cells: triangle.cells,
-        },
+        confirmedOriginPeriods: originLabels.map((l) => l.trim()),
+        confirmedDevelopmentPeriods: devLabels.map((l) => l.trim()),
         periodMeta: { originGranularity, developmentInterval },
       });
       setAccepted({ triangleId: res.triangleId });
@@ -468,7 +471,7 @@ function PeriodsStep({
       />
 
       {acceptError && (
-        <p
+        <div
           className={cn(
             "rounded-md px-3 py-2 text-sm",
             acceptError.engine
@@ -477,8 +480,19 @@ function PeriodsStep({
           )}
           aria-live="polite"
         >
-          {acceptError.message}
-        </p>
+          <p>{acceptError.message}</p>
+          {/* A data problem (not an engine outage) has no in-place fix — the only
+              path forward is to fix the source and re-upload (PRD §6.2). */}
+          {!acceptError.engine && (
+            <button
+              type="button"
+              onClick={onReset}
+              className="mt-2 font-medium underline hover:no-underline"
+            >
+              Fix source and re-upload
+            </button>
+          )}
+        </div>
       )}
 
       <button

@@ -50,16 +50,12 @@ const publicFunctionArgs: Record<string, Record<string, unknown>> = {
   // triangleId is a v.id("triangles") validated before the guard runs — a real
   // row id is injected at call time (like createFromUpload's storageId).
   "triangles:validateTriangle": { workspaceId: "org_test" },
-  // acceptTriangle also validates its confirmedTriangle/periodMeta args before
-  // the guard runs; supply a minimally valid Triangle here, triangleId injected.
+  // acceptTriangle validates its confirmed-period/periodMeta args before the
+  // guard runs; supply minimal label arrays here, triangleId injected.
   "triangles:acceptTriangle": {
     workspaceId: "org_test",
-    confirmedTriangle: {
-      kind: "paid",
-      origin_periods: ["2019"],
-      development_periods: ["12"],
-      cells: [[100]],
-    },
+    confirmedOriginPeriods: ["2019"],
+    confirmedDevelopmentPeriods: ["12"],
     periodMeta: { originGranularity: "annual", developmentInterval: "months" },
   },
   "triangles:getById": { workspaceId: "org_test" },

@@ -4,7 +4,7 @@ baseline_commit: 382888f08abe73cf1953c31a610530fb9fdaf610
 
 # Story 3.3: Period Confirmation and Triangle Acceptance
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -125,6 +125,23 @@ This story completes Epic 3: it turns the wizard's **Periods step** (a stub afte
   - [x] `engine/tests/` `/canonicalize` test (Task 2).
   - [x] Component tests where practical (jsdom): a `PeriodsStep` ambiguous-prompt render / Accept-disabled-until-resolved test; a detail-page-grid render is covered indirectly by the existing `tests/triangle-grid.test.tsx` (the grid component is unchanged). Prioritize the convex-test + parser/detection suites (the ACs live there); do not over-invest in wizard DOM tests.
   - [x] **Full gates green before marking review:** `npm test`, root `npx tsc --noEmit` + `npx tsc -p convex/tsconfig.json --noEmit`, `npm run lint`, `npm run build` (compiles `/triangles` and `/triangles/[triangleId]`), and `cd engine && uv run pytest`. Keep the single Playwright smoke as-is (do not extend).
+
+### Review Findings
+
+_Epic 3 adversarial code review (2026-07-19), 3 layers (Blind Hunter, Edge Case Hunter, Acceptance Auditor) over the full 3.1+3.2+3.3 diff. Triaged: 8 patch, 4 deferred, 1 dismissed. Acceptance Auditor verdict: all ACs of 3.1/3.2/3.3 satisfied, no out-of-scope work._
+
+- [x] [Review][Patch] **HIGH — `acceptTriangle` freezes client-supplied cells without reconciling against the stored file** [convex/triangles.ts `acceptTriangle`] — the wizard sends `confirmedTriangle` incl. `cells`; the server re-`/validate`s and canonicalizes but never compares cells to the uploaded bytes, so a buggy/malicious client can freeze fabricated numbers with a valid Lineage hash while `rawFileHash` still points at the genuine upload (breaks the AD-1/two-hash provenance design). Fix: re-read `storageId`, re-`parseTriangleGrid`, take **cells from the server parse**, apply only the confirmed **labels**/periodMeta from the client (assert label counts match), then `/validate` + `/canonicalize` + freeze.
+- [x] [Review][Defer] **`coerceCell` decimal-comma corruption is SheetJS-owned, not fixable at this layer** [convex/lib/triangleParse.ts] — reclassified from patch after empirical verification: SheetJS's `raw:true` CSV parser coerces `"1,5"`→`15`, `"1e5"`→`100000`, `"0x10"`→`16` **before** `coerceCell` ever runs, so tightening `coerceCell` cannot fix the CSV path (and no test through the real parse path can prove it). The genuine fix is a parse-contract change (read raw cell text with `raw:false`, do all numeric coercion in `coerceCell`), which also affects XLSX date/format handling — deferred to its own story. Mitigated today by the wizard's visible grid preview + explicit human acceptance.
+- [x] [Review][Patch] **LOW/MED — `callEngine` success branch is unwrapped and unvalidated** [convex/lib/engineClient.ts:69; convex/triangles.ts `acceptTriangle`] — `if (res.ok) return (await res.json()) as T` lets a 200-with-non-JSON body throw a raw `SyntaxError`, and no shape check means an engine glitch could freeze an empty `triangleHash`. Fix: wrap the ok-branch `json()` in try/catch → `ENGINE_UNAVAILABLE`; assert `triangleHash` non-empty in `acceptTriangle` before `markAccepted`.
+- [x] [Review][Patch] **LOW — `isEngineError` misclassifies engine domain 4xx as "engine unavailable"** [components/UploadWizard.tsx `isEngineError`] — it matches the whole `engine.` prefix, so `engine.bad_request` shows "engine service is unavailable" + a Retry that loops on a deterministic failure. Fix: treat only `ENGINE_UNAVAILABLE`/`ENGINE_UNCONFIGURED` (and an `engine.unavailable`-style code) as availability problems, not every `engine.*`.
+- [x] [Review][Patch] **LOW — `validateTriangle` has no status gate → post-acceptance audit noise** [convex/triangles.ts `validateTriangle`] — re-running it on a `validated` (accepted, immutable) Triangle re-parses the original file and appends a fresh `triangle.validated` audit entry after acceptance (content stays safe — `markValidationFailed` no-ops on `validated`). Fix: short-circuit `validateTriangle` when `status === "validated"`.
+- [x] [Review][Patch] **LOW — `TRIANGLE_INVALID` on accept is a UX dead-end** [components/UploadWizard.tsx `PeriodsStep`] — the error message says "Fix the source and re-upload" but the Periods step exposes no control to return to the File step. Fix: surface a "Back to file / re-upload" action in `PeriodsStep`'s error state (reuse `resetToFile`).
+- [x] [Review][Patch] **LOW — clipboard `writeText` unhandled rejection** [app/(app)/triangles/[triangleId]/page.tsx `HashRow`; app/(app)/triangles/page.tsx `copyHash`] — in an insecure context / on permission-deny the promise rejects unhandled and no feedback shows. Fix: wrap in try/catch.
+- [x] [Review][Patch] **LOW — detail-page "not accepted" copy is wrong for `validation_failed`** [app/(app)/triangles/[triangleId]/page.tsx] — both `pending_validation` and `validation_failed` rows are told to "complete the Periods step to accept it," but a failed row can never reach that step. Fix: branch the copy by status.
+- [x] [Review][Defer] **createFromUpload deletes a caller-supplied `storageId` with no ownership check** [convex/triangles.ts `createFromUpload`] — deferred, pre-existing (Story 3.1); low exploitability (Convex storage ids are unguessable and not exposed cross-tenant).
+- [x] [Review][Defer] **`xlsx@^0.18.5` parses untrusted uploads with published advisories** [package.json] — deferred, pre-existing (Story 3.1, already flagged for Rohan); pin/vendor decision.
+- [x] [Review][Defer] **A row whose blob vanished is unvalidatable yet dedupe blocks re-upload** [convex/triangles.ts] — deferred, pre-existing (3.1/3.2 interaction edge).
+- [x] [Review][Defer] **Period detection omits the "mutually-inconsistent axes" ambiguity trigger** [convex/lib/periodDetection.ts] — deferred, a permitted Task-3 simplification, mitigated by AC1's mandatory explicit confirmation.
 
 ## Dev Notes
 

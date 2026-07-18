@@ -620,9 +620,12 @@ describe("validateTriangle — engine /validate (AC1, AC3, AC4, AC5)", () => {
 
 // --- Story 3.3: acceptTriangle + getById -------------------------------------
 
-/** The parsed grid of TRIANGLE_CSV, snake_case wire shape (what the client
- *  holds from validateTriangle and sends back, with confirmed labels). */
-const CONFIRMED_TRIANGLE = {
+/** The confirmed period labels the client sends (matching TRIANGLE_CSV's shape).
+ *  The client sends ONLY labels — cells come from the server-side re-parse. */
+const CONFIRMED_ORIGINS = ["2019", "2020", "2021"];
+const CONFIRMED_DEVS = ["12", "24", "36"];
+/** What the server freezes: confirmed labels + the cells parsed from TRIANGLE_CSV. */
+const EXPECTED_ACCEPTED = {
   kind: "paid" as const,
   origin_periods: ["2019", "2020", "2021"],
   development_periods: ["12", "24", "36"],
@@ -676,7 +679,8 @@ describe("acceptTriangle — acceptance (AC1, AC3, AC5)", () => {
     const out = await t.withIdentity(analystA).action(api.triangles.acceptTriangle, {
       workspaceId: "org_A",
       triangleId,
-      confirmedTriangle: CONFIRMED_TRIANGLE,
+      confirmedOriginPeriods: CONFIRMED_ORIGINS,
+      confirmedDevelopmentPeriods: CONFIRMED_DEVS,
       periodMeta: PERIOD_META,
     });
 
@@ -686,7 +690,7 @@ describe("acceptTriangle — acceptance (AC1, AC3, AC5)", () => {
     const row = (await triangleRows(t))[0];
     expect(row.status).toBe("validated");
     expect(row.triangleHash).toBe(STUB_HASH);
-    expect(row.acceptedTriangle).toEqual(CONFIRMED_TRIANGLE);
+    expect(row.acceptedTriangle).toEqual(EXPECTED_ACCEPTED);
     expect(row.periodMeta).toEqual(PERIOD_META);
     expect(row.acceptedBy).toBe("user_a");
     expect(typeof row.acceptedAt).toBe("string");
@@ -713,7 +717,8 @@ describe("acceptTriangle — acceptance (AC1, AC3, AC5)", () => {
     await t.withIdentity(analystA).action(api.triangles.acceptTriangle, {
       workspaceId: "org_A",
       triangleId,
-      confirmedTriangle: CONFIRMED_TRIANGLE,
+      confirmedOriginPeriods: CONFIRMED_ORIGINS,
+      confirmedDevelopmentPeriods: CONFIRMED_DEVS,
       periodMeta: PERIOD_META,
     });
 
@@ -724,7 +729,8 @@ describe("acceptTriangle — acceptance (AC1, AC3, AC5)", () => {
       await t.withIdentity(analystA).action(api.triangles.acceptTriangle, {
         workspaceId: "org_A",
         triangleId,
-        confirmedTriangle: { ...CONFIRMED_TRIANGLE, origin_periods: ["X", "Y", "Z"] },
+        confirmedOriginPeriods: ["X", "Y", "Z"],
+        confirmedDevelopmentPeriods: CONFIRMED_DEVS,
         periodMeta: { originGranularity: "quarterly", developmentInterval: "quarters" },
       });
       expect.unreachable("expected TRIANGLE_NOT_ACCEPTABLE");
@@ -735,7 +741,7 @@ describe("acceptTriangle — acceptance (AC1, AC3, AC5)", () => {
 
     const row = (await triangleRows(t))[0];
     expect(row.triangleHash).toBe(STUB_HASH);
-    expect(row.acceptedTriangle).toEqual(CONFIRMED_TRIANGLE);
+    expect(row.acceptedTriangle).toEqual(EXPECTED_ACCEPTED);
   });
 
   test("markValidationFailed cannot demote an accepted Triangle (AC5)", async () => {
@@ -745,7 +751,8 @@ describe("acceptTriangle — acceptance (AC1, AC3, AC5)", () => {
     await t.withIdentity(analystA).action(api.triangles.acceptTriangle, {
       workspaceId: "org_A",
       triangleId,
-      confirmedTriangle: CONFIRMED_TRIANGLE,
+      confirmedOriginPeriods: CONFIRMED_ORIGINS,
+      confirmedDevelopmentPeriods: CONFIRMED_DEVS,
       periodMeta: PERIOD_META,
     });
 
@@ -753,7 +760,7 @@ describe("acceptTriangle — acceptance (AC1, AC3, AC5)", () => {
     await t.mutation(internal.triangles.markValidationFailed, { triangleId });
     const row = (await triangleRows(t))[0];
     expect(row.status).toBe("validated");
-    expect(row.acceptedTriangle).toEqual(CONFIRMED_TRIANGLE);
+    expect(row.acceptedTriangle).toEqual(EXPECTED_ACCEPTED);
   });
 
   test("status gate: a validation_failed Triangle cannot be accepted", async () => {
@@ -780,7 +787,8 @@ describe("acceptTriangle — acceptance (AC1, AC3, AC5)", () => {
       await t.withIdentity(analystA).action(api.triangles.acceptTriangle, {
         workspaceId: "org_A",
         triangleId,
-        confirmedTriangle: CONFIRMED_TRIANGLE,
+        confirmedOriginPeriods: CONFIRMED_ORIGINS,
+        confirmedDevelopmentPeriods: CONFIRMED_DEVS,
         periodMeta: PERIOD_META,
       });
       expect.unreachable("expected TRIANGLE_NOT_ACCEPTABLE");
@@ -802,7 +810,8 @@ describe("acceptTriangle — acceptance (AC1, AC3, AC5)", () => {
       await t.withIdentity(analystA).action(api.triangles.acceptTriangle, {
         workspaceId: "org_A",
         triangleId,
-        confirmedTriangle: CONFIRMED_TRIANGLE,
+        confirmedOriginPeriods: CONFIRMED_ORIGINS,
+        confirmedDevelopmentPeriods: CONFIRMED_DEVS,
         periodMeta: PERIOD_META,
       });
       expect.unreachable("expected TRIANGLE_INVALID");
@@ -827,7 +836,8 @@ describe("acceptTriangle — acceptance (AC1, AC3, AC5)", () => {
       await t.action(api.triangles.acceptTriangle, {
         workspaceId: "org_A",
         triangleId,
-        confirmedTriangle: CONFIRMED_TRIANGLE,
+        confirmedOriginPeriods: CONFIRMED_ORIGINS,
+        confirmedDevelopmentPeriods: CONFIRMED_DEVS,
         periodMeta: PERIOD_META,
       });
       expect.unreachable("expected UNAUTHENTICATED");
@@ -841,7 +851,8 @@ describe("acceptTriangle — acceptance (AC1, AC3, AC5)", () => {
       await t.withIdentity(analystB).action(api.triangles.acceptTriangle, {
         workspaceId: "org_B",
         triangleId,
-        confirmedTriangle: CONFIRMED_TRIANGLE,
+        confirmedOriginPeriods: CONFIRMED_ORIGINS,
+        confirmedDevelopmentPeriods: CONFIRMED_DEVS,
         periodMeta: PERIOD_META,
       });
       expect.unreachable("expected TRIANGLE_NOT_FOUND");
@@ -849,6 +860,143 @@ describe("acceptTriangle — acceptance (AC1, AC3, AC5)", () => {
       tenancy = e;
     }
     expect((tenancy as ConvexError<{ code: string }>).data.code).toBe("TRIANGLE_NOT_FOUND");
+  });
+
+  test("chain of custody: cells come from the stored file, only labels are relabeled", async () => {
+    const t = convexTest(schema, modules);
+    const triangleId = await seedValidated(t);
+    // Capture what the client-parsed grid actually sends to /canonicalize, to
+    // prove the server builds the body from its OWN re-parse, not client cells.
+    const fetchMock = engineStub();
+    vi.stubGlobal("fetch", fetchMock);
+
+    // The client confirms DIFFERENT labels (relabel) — it never sends cells.
+    await t.withIdentity(analystA).action(api.triangles.acceptTriangle, {
+      workspaceId: "org_A",
+      triangleId,
+      confirmedOriginPeriods: ["AY2019", "AY2020", "AY2021"],
+      confirmedDevelopmentPeriods: ["12m", "24m", "36m"],
+      periodMeta: PERIOD_META,
+    });
+
+    // Frozen content = confirmed labels + the ORIGINAL parsed cells (from storage).
+    const row = (await triangleRows(t))[0];
+    expect(row.acceptedTriangle).toEqual({
+      kind: "paid",
+      origin_periods: ["AY2019", "AY2020", "AY2021"],
+      development_periods: ["12m", "24m", "36m"],
+      cells: EXPECTED_ACCEPTED.cells, // the real numbers, server-sourced
+    });
+    // The /canonicalize body carries the server-parsed cells, never client-authored.
+    const canonCall = fetchMock.mock.calls.find((c) => String(c[0]).endsWith("/canonicalize"));
+    expect(JSON.parse(canonCall![1].body as string).triangle.cells).toEqual(
+      EXPECTED_ACCEPTED.cells,
+    );
+  });
+
+  test("confirmed label count mismatch → PERIOD_COUNT_MISMATCH (cannot reshape)", async () => {
+    const t = convexTest(schema, modules);
+    const triangleId = await seedValidated(t);
+    vi.stubGlobal("fetch", engineStub());
+
+    let err: unknown;
+    try {
+      await t.withIdentity(analystA).action(api.triangles.acceptTriangle, {
+        workspaceId: "org_A",
+        triangleId,
+        confirmedOriginPeriods: ["2019", "2020"], // 2, parsed has 3
+        confirmedDevelopmentPeriods: CONFIRMED_DEVS,
+        periodMeta: PERIOD_META,
+      });
+      expect.unreachable("expected PERIOD_COUNT_MISMATCH");
+    } catch (e) {
+      err = e;
+    }
+    expect((err as ConvexError<{ code: string }>).data.code).toBe("PERIOD_COUNT_MISMATCH");
+    expect((await triangleRows(t))[0].status).toBe("pending_validation");
+  });
+
+  test("duplicate confirmed labels → TRIANGLE_INVALID before any engine call", async () => {
+    const t = convexTest(schema, modules);
+    const triangleId = await seedValidated(t);
+    const fetchMock = engineStub();
+    vi.stubGlobal("fetch", fetchMock);
+
+    let err: unknown;
+    try {
+      await t.withIdentity(analystA).action(api.triangles.acceptTriangle, {
+        workspaceId: "org_A",
+        triangleId,
+        confirmedOriginPeriods: ["2019", "2019", "2021"], // duplicate
+        confirmedDevelopmentPeriods: CONFIRMED_DEVS,
+        periodMeta: PERIOD_META,
+      });
+      expect.unreachable("expected TRIANGLE_INVALID");
+    } catch (e) {
+      err = e;
+    }
+    expect((err as ConvexError<{ code: string }>).data.code).toBe("TRIANGLE_INVALID");
+    // No engine call happened for a client-side label defect.
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  test("an empty triangleHash from the engine is never frozen (ENGINE_UNAVAILABLE)", async () => {
+    const t = convexTest(schema, modules);
+    const triangleId = await seedValidated(t);
+    // /validate ok, but /canonicalize returns an empty hash — must not be frozen.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((url: string) =>
+        Promise.resolve(
+          String(url).endsWith("/canonicalize")
+            ? jsonResponse({ triangleHash: "" })
+            : jsonResponse({ valid: true, findings: [] }),
+        ),
+      ),
+    );
+
+    let err: unknown;
+    try {
+      await t.withIdentity(analystA).action(api.triangles.acceptTriangle, {
+        workspaceId: "org_A",
+        triangleId,
+        confirmedOriginPeriods: CONFIRMED_ORIGINS,
+        confirmedDevelopmentPeriods: CONFIRMED_DEVS,
+        periodMeta: PERIOD_META,
+      });
+      expect.unreachable("expected ENGINE_UNAVAILABLE");
+    } catch (e) {
+      err = e;
+    }
+    expect((err as ConvexError<{ code: string }>).data.code).toBe("ENGINE_UNAVAILABLE");
+    expect((await triangleRows(t))[0].status).toBe("pending_validation");
+  });
+
+  test("validateTriangle short-circuits on an accepted Triangle (no re-validate audit)", async () => {
+    const t = convexTest(schema, modules);
+    const triangleId = await seedValidated(t);
+    vi.stubGlobal("fetch", engineStub());
+    await t.withIdentity(analystA).action(api.triangles.acceptTriangle, {
+      workspaceId: "org_A",
+      triangleId,
+      confirmedOriginPeriods: CONFIRMED_ORIGINS,
+      confirmedDevelopmentPeriods: CONFIRMED_DEVS,
+      periodMeta: PERIOD_META,
+    });
+    const auditsBefore = (await auditRows(t)).length;
+
+    let err: unknown;
+    try {
+      await t
+        .withIdentity(analystA)
+        .action(api.triangles.validateTriangle, { workspaceId: "org_A", triangleId });
+      expect.unreachable("expected TRIANGLE_ALREADY_ACCEPTED");
+    } catch (e) {
+      err = e;
+    }
+    expect((err as ConvexError<{ code: string }>).data.code).toBe("TRIANGLE_ALREADY_ACCEPTED");
+    // No spurious post-acceptance triangle.validated audit entry was written.
+    expect((await auditRows(t)).length).toBe(auditsBefore);
   });
 });
 
@@ -862,7 +1010,8 @@ describe("getById — Triangle detail (AC4)", () => {
     await t.withIdentity(analystA).action(api.triangles.acceptTriangle, {
       workspaceId: "org_A",
       triangleId,
-      confirmedTriangle: CONFIRMED_TRIANGLE,
+      confirmedOriginPeriods: CONFIRMED_ORIGINS,
+      confirmedDevelopmentPeriods: CONFIRMED_DEVS,
       periodMeta: PERIOD_META,
     });
     vi.unstubAllEnvs();
@@ -874,7 +1023,7 @@ describe("getById — Triangle detail (AC4)", () => {
     expect(row?.status).toBe("validated");
     expect(row?.triangleHash).toBe(STUB_HASH);
     expect(row?.rawFileHash).toMatch(/^[0-9a-f]{64}$/);
-    expect(row?.acceptedTriangle).toEqual(CONFIRMED_TRIANGLE);
+    expect(row?.acceptedTriangle).toEqual(EXPECTED_ACCEPTED);
     expect(row?.periodMeta).toEqual(PERIOD_META);
   });
 

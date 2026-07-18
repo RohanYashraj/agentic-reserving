@@ -66,7 +66,16 @@ export async function callEngine<T>(path: string, body: unknown): Promise<T> {
   }
 
   if (res.ok) {
-    return (await res.json()) as T;
+    // A 200 with a non-JSON/empty body (proxy page, truncated response) must fail
+    // closed as ENGINE_UNAVAILABLE, never let a raw SyntaxError escape to the caller.
+    try {
+      return (await res.json()) as T;
+    } catch {
+      throw new ConvexError({
+        code: "ENGINE_UNAVAILABLE",
+        message: "The engine service returned an unreadable response.",
+      });
+    }
   }
 
   // Map the engine's structured error envelope; fall back for anything else.

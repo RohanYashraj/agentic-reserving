@@ -97,6 +97,10 @@ function coerceCell(cell: RawCell, origin: string, dev: string): number | null {
   if (typeof cell === "string") {
     // Trim only trivially-present thousands separators / currency; anything
     // ambiguous stays non-numeric and is rejected rather than silently coerced.
+    // NOTE (code-review 2026-07-19): decimal-comma corruption ("1,5" → 15) for
+    // CSV happens INSIDE SheetJS's raw:true coercion, upstream of here, so it is
+    // not fixable at this layer — see deferred-work (a raw:false + self-coerce
+    // parse-contract change owns the real fix).
     const cleaned = cell.trim().replace(/^\$/, "").replace(/,/g, "");
     const n = Number(cleaned);
     if (cleaned !== "" && Number.isFinite(n)) return n;

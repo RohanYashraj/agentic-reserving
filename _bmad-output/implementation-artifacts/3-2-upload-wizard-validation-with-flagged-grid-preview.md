@@ -4,7 +4,7 @@ baseline_commit: e90d439
 
 # Story 3.2: Upload Wizard Validation with Flagged Grid Preview
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 

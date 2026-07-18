@@ -262,6 +262,7 @@ export const getForValidation = internalQuery({
       label: row.label,
       format: row.format,
       rawFileHash: row.rawFileHash,
+      status: row.status,
     };
   },
 });
@@ -320,6 +321,15 @@ export const validateTriangle = action({
       throw new ConvexError({
         code: "TRIANGLE_NOT_FOUND",
         message: "That Triangle does not exist in this Workspace.",
+      });
+    }
+    // An accepted Triangle is immutable (Story 3.3). Re-validating it would
+    // re-parse the pre-confirmation file and append a misleading post-acceptance
+    // `triangle.validated` audit entry — short-circuit instead.
+    if (t.status === "validated") {
+      throw new ConvexError({
+        code: "TRIANGLE_ALREADY_ACCEPTED",
+        message: "This Triangle is already accepted and cannot be re-validated.",
       });
     }
 
@@ -386,6 +396,9 @@ export const getForAcceptance = internalQuery({
     return {
       workspaceId: row.workspaceId,
       status: row.status,
+      storageId: row.storageId,
+      format: row.format,
+      label: row.label,
     };
   },
 });
@@ -439,28 +452,51 @@ export const markAccepted = internalMutation({
   },
 });
 
+/** A confirmed label is trimmed, non-empty, and unique within its axis. */
+function assertConfirmedLabels(labels: string[], axis: string): string[] {
+  const trimmed = labels.map((l) => l.trim());
+  if (trimmed.some((l) => l === "")) {
+    throw new ConvexError({
+      code: "TRIANGLE_INVALID",
+      message: `Every ${axis} needs a label before the Triangle can be accepted.`,
+    });
+  }
+  if (new Set(trimmed).size !== trimmed.length) {
+    throw new ConvexError({
+      code: "TRIANGLE_INVALID",
+      message: `Each ${axis} label must be unique.`,
+    });
+  }
+  return trimmed;
+}
+
 /**
  * Accept a Triangle: confirm the user's periods, record the ENGINE-computed
  * canonical-triangle-JSON Lineage hash, freeze the content, and audit (FR-3,
  * AC1, AC3, AC5).
  *
- * An action: it makes the outbound engine calls (/validate re-check, /canonicalize)
- * — only Convex may call the engine (AD-12) — and reaches the AD-6 writer via
- * ctx.runMutation. The client sends the confirmed Triangle it already holds from
- * validateTriangle (with the user's confirmed labels); cells pass through
- * untouched (AD-1). We do NOT trust the client's word — the fail-closed /validate
- * re-check and the status gate in markAccepted are the integrity backstops.
+ * An action: it re-reads the stored bytes, makes the outbound engine calls
+ * (/validate re-check, /canonicalize) — only Convex may call the engine (AD-12) —
+ * and reaches the AD-6 writer via ctx.runMutation.
+ *
+ * Chain of custody (AD-1/AD-3): the client sends only the CONFIRMED LABELS +
+ * granularity, never cell values. The action re-parses the stored file and takes
+ * the CELLS from that server-side parse — so the accepted, canonical Triangle is
+ * provably the uploaded file's numbers, relabeled. A tampered or buggy client can
+ * relabel but can never substitute figures; the frozen triangleHash certifies the
+ * real upload, not client-authored data.
  */
 export const acceptTriangle = action({
   args: {
     workspaceId: v.string(),
     triangleId: v.id("triangles"),
-    confirmedTriangle: triangleValidator,
+    confirmedOriginPeriods: v.array(v.string()),
+    confirmedDevelopmentPeriods: v.array(v.string()),
     periodMeta: periodMetaValidator,
   },
   handler: async (
     ctx,
-    { workspaceId, triangleId, confirmedTriangle, periodMeta },
+    { workspaceId, triangleId, confirmedOriginPeriods, confirmedDevelopmentPeriods, periodMeta },
   ): Promise<{ status: "accepted"; triangleId: string; triangleHash: string }> => {
     const { identity } = await requireMember(ctx, workspaceId);
     const actor = identity.subject;
@@ -483,11 +519,46 @@ export const acceptTriangle = action({
       });
     }
 
-    // Fail-closed validity re-check on the CONFIRMED-label Triangle. Labels are
-    // opaque to validation and cells are unchanged, but we never trust the client
-    // or the status alone — the engine is the authority. This also structurally
-    // validates the confirmed Triangle (duplicate/empty labels → engine 422 →
-    // mapped ConvexError). An invalid Triangle is never accepted.
+    // Re-parse the stored file — the CELLS are taken from here (never the client),
+    // closing the chain of custody. A parse ConvexError propagates verbatim.
+    const blob = await ctx.storage.get(t.storageId);
+    if (blob === null) {
+      throw new ConvexError({
+        code: "UPLOAD_NOT_FOUND",
+        message: "The uploaded file could not be found in storage.",
+      });
+    }
+    const parsed = parseTriangleGrid(await blob.arrayBuffer(), t.format, t.label);
+
+    // The user may relabel (period confirmation) but cannot change the shape:
+    // confirmed label counts must match the parsed grid's dimensions.
+    if (
+      confirmedOriginPeriods.length !== parsed.origin_periods.length ||
+      confirmedDevelopmentPeriods.length !== parsed.development_periods.length
+    ) {
+      throw new ConvexError({
+        code: "PERIOD_COUNT_MISMATCH",
+        message:
+          "The confirmed periods do not match the triangle's shape. Reload the triangle and try again.",
+      });
+    }
+    const originLabels = assertConfirmedLabels(confirmedOriginPeriods, "origin period");
+    const developmentLabels = assertConfirmedLabels(
+      confirmedDevelopmentPeriods,
+      "development period",
+    );
+
+    // The Triangle we freeze: server-parsed cells + confirmed labels (AD-1 — cells
+    // pass through untouched, never computed on).
+    const confirmedTriangle = {
+      kind: parsed.kind,
+      origin_periods: originLabels,
+      development_periods: developmentLabels,
+      cells: parsed.cells,
+    };
+
+    // Fail-closed validity re-check — we never trust the status alone; the engine
+    // is the authority (it also rejects any structurally bad relabeling → 422).
     const report = await callEngine<ValidationReport>("/validate", {
       triangle: confirmedTriangle,
     });
@@ -506,6 +577,14 @@ export const acceptTriangle = action({
     const { triangleHash } = await callEngine<CanonicalizeResponse>("/canonicalize", {
       triangle: confirmedTriangle,
     });
+    if (typeof triangleHash !== "string" || triangleHash === "") {
+      // Defensive: never freeze an empty/garbage Lineage hash if the engine
+      // returned a well-formed-looking-but-empty response.
+      throw new ConvexError({
+        code: "ENGINE_UNAVAILABLE",
+        message: "The engine service did not return a Triangle hash.",
+      });
+    }
 
     const acceptedAt = new Date(Date.now()).toISOString();
     await ctx.runMutation(internal.triangles.markAccepted, {
