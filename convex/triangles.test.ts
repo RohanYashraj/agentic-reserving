@@ -4,7 +4,7 @@ import { ConvexError } from "convex/values";
 import type { SchemaDefinition, GenericSchema } from "convex/server";
 import * as XLSX from "xlsx";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import schema from "./schema";
 
@@ -615,5 +615,285 @@ describe("validateTriangle — engine /validate (AC1, AC3, AC4, AC5)", () => {
       tenancy = e;
     }
     expect((tenancy as ConvexError<{ code: string }>).data.code).toBe("TRIANGLE_NOT_FOUND");
+  });
+});
+
+// --- Story 3.3: acceptTriangle + getById -------------------------------------
+
+/** The parsed grid of TRIANGLE_CSV, snake_case wire shape (what the client
+ *  holds from validateTriangle and sends back, with confirmed labels). */
+const CONFIRMED_TRIANGLE = {
+  kind: "paid" as const,
+  origin_periods: ["2019", "2020", "2021"],
+  development_periods: ["12", "24", "36"],
+  cells: [
+    [100, 150, 175],
+    [120, 180, null],
+    [130, null, null],
+  ],
+};
+const PERIOD_META = { originGranularity: "annual", developmentInterval: "months" };
+const STUB_HASH = "a".repeat(64);
+
+/** Route the engine stub by path: /validate → report, /canonicalize → hash. */
+function engineStub(report: { valid: boolean; findings: unknown[] } = { valid: true, findings: [] }) {
+  return vi.fn().mockImplementation((url: string) => {
+    if (String(url).endsWith("/canonicalize")) {
+      return Promise.resolve(jsonResponse({ triangleHash: STUB_HASH }));
+    }
+    return Promise.resolve(jsonResponse(report));
+  });
+}
+
+/** Drive a pending_validation row through validateTriangle (clean pass) so it
+ *  is genuinely "validated-and-pending" before acceptance. */
+async function seedValidated(t: Harness): Promise<Id<"triangles">> {
+  const triangleId = await seedTriangle(t);
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ valid: true, findings: [] })));
+  await t
+    .withIdentity(analystA)
+    .action(api.triangles.validateTriangle, { workspaceId: "org_A", triangleId });
+  return triangleId;
+}
+
+describe("acceptTriangle — acceptance (AC1, AC3, AC5)", () => {
+  beforeEach(() => {
+    vi.stubEnv("ENGINE_SERVICE_URL", "http://engine.test");
+    vi.stubEnv("ENGINE_SERVICE_SECRET", "test-secret");
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  test("happy accept → validated row with engine hash + accepted content + audit", async () => {
+    const t = convexTest(schema, modules);
+    const triangleId = await seedValidated(t);
+    const fetchMock = engineStub();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const out = await t.withIdentity(analystA).action(api.triangles.acceptTriangle, {
+      workspaceId: "org_A",
+      triangleId,
+      confirmedTriangle: CONFIRMED_TRIANGLE,
+      periodMeta: PERIOD_META,
+    });
+
+    expect(out.status).toBe("accepted");
+    expect(out.triangleHash).toBe(STUB_HASH);
+
+    const row = (await triangleRows(t))[0];
+    expect(row.status).toBe("validated");
+    expect(row.triangleHash).toBe(STUB_HASH);
+    expect(row.acceptedTriangle).toEqual(CONFIRMED_TRIANGLE);
+    expect(row.periodMeta).toEqual(PERIOD_META);
+    expect(row.acceptedBy).toBe("user_a");
+    expect(typeof row.acceptedAt).toBe("string");
+
+    const audit = (await auditRows(t)).find((a) => a.eventType === "triangle.accepted");
+    expect(audit).toBeDefined();
+    expect(audit?.payload.triangleHash).toBe(STUB_HASH);
+    expect(audit?.payload.originCount).toBe(3);
+    expect(audit?.actor).toBe("user_a");
+
+    // /canonicalize was called with the snake_case confirmed body + Bearer header.
+    const canonCall = fetchMock.mock.calls.find((c) => String(c[0]).endsWith("/canonicalize"));
+    expect(canonCall).toBeDefined();
+    const [, init] = canonCall!;
+    expect((init.headers as Record<string, string>).authorization).toBe("Bearer test-secret");
+    expect(JSON.parse(init.body as string).triangle.origin_periods).toEqual(["2019", "2020", "2021"]);
+  });
+
+  test("immutability (AC5): a second accept throws and the stored content is unchanged", async () => {
+    const t = convexTest(schema, modules);
+    const triangleId = await seedValidated(t);
+    vi.stubGlobal("fetch", engineStub());
+
+    await t.withIdentity(analystA).action(api.triangles.acceptTriangle, {
+      workspaceId: "org_A",
+      triangleId,
+      confirmedTriangle: CONFIRMED_TRIANGLE,
+      periodMeta: PERIOD_META,
+    });
+
+    // A second accept with DIFFERENT content must be refused (status gate), and
+    // the frozen hash/content must not change.
+    let err: unknown;
+    try {
+      await t.withIdentity(analystA).action(api.triangles.acceptTriangle, {
+        workspaceId: "org_A",
+        triangleId,
+        confirmedTriangle: { ...CONFIRMED_TRIANGLE, origin_periods: ["X", "Y", "Z"] },
+        periodMeta: { originGranularity: "quarterly", developmentInterval: "quarters" },
+      });
+      expect.unreachable("expected TRIANGLE_NOT_ACCEPTABLE");
+    } catch (e) {
+      err = e;
+    }
+    expect((err as ConvexError<{ code: string }>).data.code).toBe("TRIANGLE_NOT_ACCEPTABLE");
+
+    const row = (await triangleRows(t))[0];
+    expect(row.triangleHash).toBe(STUB_HASH);
+    expect(row.acceptedTriangle).toEqual(CONFIRMED_TRIANGLE);
+  });
+
+  test("markValidationFailed cannot demote an accepted Triangle (AC5)", async () => {
+    const t = convexTest(schema, modules);
+    const triangleId = await seedValidated(t);
+    vi.stubGlobal("fetch", engineStub());
+    await t.withIdentity(analystA).action(api.triangles.acceptTriangle, {
+      workspaceId: "org_A",
+      triangleId,
+      confirmedTriangle: CONFIRMED_TRIANGLE,
+      periodMeta: PERIOD_META,
+    });
+
+    // Directly invoke the internal writer — it must no-op on a validated row.
+    await t.mutation(internal.triangles.markValidationFailed, { triangleId });
+    const row = (await triangleRows(t))[0];
+    expect(row.status).toBe("validated");
+    expect(row.acceptedTriangle).toEqual(CONFIRMED_TRIANGLE);
+  });
+
+  test("status gate: a validation_failed Triangle cannot be accepted", async () => {
+    const t = convexTest(schema, modules);
+    const triangleId = await seedTriangle(t);
+    // Fail validation → status validation_failed.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse({
+          valid: false,
+          findings: [{ origin: "2019", dev: "24", reason: "drop", code: "paid_monotonicity" }],
+        }),
+      ),
+    );
+    await t
+      .withIdentity(analystA)
+      .action(api.triangles.validateTriangle, { workspaceId: "org_A", triangleId });
+    expect((await triangleRows(t))[0].status).toBe("validation_failed");
+
+    vi.stubGlobal("fetch", engineStub());
+    let err: unknown;
+    try {
+      await t.withIdentity(analystA).action(api.triangles.acceptTriangle, {
+        workspaceId: "org_A",
+        triangleId,
+        confirmedTriangle: CONFIRMED_TRIANGLE,
+        periodMeta: PERIOD_META,
+      });
+      expect.unreachable("expected TRIANGLE_NOT_ACCEPTABLE");
+    } catch (e) {
+      err = e;
+    }
+    expect((err as ConvexError<{ code: string }>).data.code).toBe("TRIANGLE_NOT_ACCEPTABLE");
+  });
+
+  test("invalid confirmed triangle → TRIANGLE_INVALID, no accept, no canonicalize", async () => {
+    const t = convexTest(schema, modules);
+    const triangleId = await seedValidated(t);
+    // /validate now returns invalid for the confirmed labels (fail-closed).
+    const fetchMock = engineStub({ valid: false, findings: [{ origin: "2019", dev: "24", reason: "x", code: "shape" }] });
+    vi.stubGlobal("fetch", fetchMock);
+
+    let err: unknown;
+    try {
+      await t.withIdentity(analystA).action(api.triangles.acceptTriangle, {
+        workspaceId: "org_A",
+        triangleId,
+        confirmedTriangle: CONFIRMED_TRIANGLE,
+        periodMeta: PERIOD_META,
+      });
+      expect.unreachable("expected TRIANGLE_INVALID");
+    } catch (e) {
+      err = e;
+    }
+    expect((err as ConvexError<{ code: string }>).data.code).toBe("TRIANGLE_INVALID");
+
+    // Row stays pending_validation; /canonicalize was never called; no accept audit.
+    expect((await triangleRows(t))[0].status).toBe("pending_validation");
+    expect(fetchMock.mock.calls.some((c) => String(c[0]).endsWith("/canonicalize"))).toBe(false);
+    expect((await auditRows(t)).some((a) => a.eventType === "triangle.accepted")).toBe(false);
+  });
+
+  test("guards + tenancy: unauthenticated rejects; org_B cannot accept org_A's Triangle", async () => {
+    const t = convexTest(schema, modules);
+    const triangleId = await seedValidated(t);
+    vi.stubGlobal("fetch", engineStub());
+
+    let unauth: unknown;
+    try {
+      await t.action(api.triangles.acceptTriangle, {
+        workspaceId: "org_A",
+        triangleId,
+        confirmedTriangle: CONFIRMED_TRIANGLE,
+        periodMeta: PERIOD_META,
+      });
+      expect.unreachable("expected UNAUTHENTICATED");
+    } catch (e) {
+      unauth = e;
+    }
+    expect((unauth as ConvexError<{ code: string }>).data.code).toBe("UNAUTHENTICATED");
+
+    let tenancy: unknown;
+    try {
+      await t.withIdentity(analystB).action(api.triangles.acceptTriangle, {
+        workspaceId: "org_B",
+        triangleId,
+        confirmedTriangle: CONFIRMED_TRIANGLE,
+        periodMeta: PERIOD_META,
+      });
+      expect.unreachable("expected TRIANGLE_NOT_FOUND");
+    } catch (e) {
+      tenancy = e;
+    }
+    expect((tenancy as ConvexError<{ code: string }>).data.code).toBe("TRIANGLE_NOT_FOUND");
+  });
+});
+
+describe("getById — Triangle detail (AC4)", () => {
+  test("returns accepted content for a member; both hashes present", async () => {
+    const t = convexTest(schema, modules);
+    vi.stubEnv("ENGINE_SERVICE_URL", "http://engine.test");
+    vi.stubEnv("ENGINE_SERVICE_SECRET", "test-secret");
+    const triangleId = await seedValidated(t);
+    vi.stubGlobal("fetch", engineStub());
+    await t.withIdentity(analystA).action(api.triangles.acceptTriangle, {
+      workspaceId: "org_A",
+      triangleId,
+      confirmedTriangle: CONFIRMED_TRIANGLE,
+      periodMeta: PERIOD_META,
+    });
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+
+    const row = await t
+      .withIdentity(analystA)
+      .query(api.triangles.getById, { workspaceId: "org_A", triangleId });
+    expect(row?.status).toBe("validated");
+    expect(row?.triangleHash).toBe(STUB_HASH);
+    expect(row?.rawFileHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(row?.acceptedTriangle).toEqual(CONFIRMED_TRIANGLE);
+    expect(row?.periodMeta).toEqual(PERIOD_META);
+  });
+
+  test("guards + tenancy: unauthenticated rejects; org_B sees null for org_A's Triangle", async () => {
+    const t = convexTest(schema, modules);
+    const triangleId = await seedTriangle(t);
+
+    let unauth: unknown;
+    try {
+      await t.query(api.triangles.getById, { workspaceId: "org_A", triangleId });
+      expect.unreachable("expected UNAUTHENTICATED");
+    } catch (e) {
+      unauth = e;
+    }
+    expect((unauth as ConvexError<{ code: string }>).data.code).toBe("UNAUTHENTICATED");
+
+    const crossWorkspace = await t
+      .withIdentity(analystB)
+      .query(api.triangles.getById, { workspaceId: "org_B", triangleId });
+    expect(crossWorkspace).toBeNull();
   });
 });

@@ -20,6 +20,7 @@ from reserving_engine import (
     Triangle,
     compute_diagnostics,
     run_methods,
+    triangle_hash,
     validate_triangle,
 )
 from tests.fixtures import TAYLOR_ASHE
@@ -70,7 +71,7 @@ def _run_body(run_id: str, triangle: Triangle, parameters: RunParameters | None 
 
 
 class TestAuth:
-    @pytest.mark.parametrize("path", ["/validate", "/runs"])
+    @pytest.mark.parametrize("path", ["/validate", "/runs", "/canonicalize"])
     def test_missing_authorization_header_is_401(self, client: TestClient, path: str) -> None:
         resp = client.post(path, json={})
         assert resp.status_code == 401
@@ -78,18 +79,18 @@ class TestAuth:
         assert body["code"] == "unauthorized"
         assert set(body) == {"code", "message", "details"}
 
-    @pytest.mark.parametrize("path", ["/validate", "/runs"])
+    @pytest.mark.parametrize("path", ["/validate", "/runs", "/canonicalize"])
     def test_wrong_secret_is_401(self, client: TestClient, path: str) -> None:
         resp = client.post(path, json={}, headers={"Authorization": "Bearer wrong-secret"})
         assert resp.status_code == 401
         assert resp.json()["code"] == "unauthorized"
 
-    @pytest.mark.parametrize("path", ["/validate", "/runs"])
+    @pytest.mark.parametrize("path", ["/validate", "/runs", "/canonicalize"])
     def test_non_bearer_scheme_is_401(self, client: TestClient, path: str) -> None:
         resp = client.post(path, json={}, headers={"Authorization": f"Basic {TEST_SECRET}"})
         assert resp.status_code == 401
 
-    @pytest.mark.parametrize("path", ["/validate", "/runs"])
+    @pytest.mark.parametrize("path", ["/validate", "/runs", "/canonicalize"])
     def test_non_ascii_token_is_401_not_500(self, client: TestClient, path: str) -> None:
         # A non-ASCII bearer token must fail closed as 401 — never crash the
         # constant-time compare (TypeError) into an unhandled 500. Sent as raw
@@ -313,3 +314,45 @@ class TestErrorEnvelopeAndWire:
         assert "lineage" in body["resultSet"]
         assert "ldfStability" in body["diagnosticsBundle"]
         assert "schemaVersion" in body["diagnosticsBundle"]
+
+
+# --------------------------------------------------------------------------- #
+# Story 3.3: /canonicalize — the engine-computed canonical Triangle hash        #
+# --------------------------------------------------------------------------- #
+
+
+class TestCanonicalize:
+    def test_returns_engine_triangle_hash(self, client: TestClient) -> None:
+        # The Lineage Triangle hash (AD-11) is single-sourced from the engine —
+        # /canonicalize must return exactly triangle_hash(triangle), the same
+        # value stamped into Lineage at /runs. camelCase key on the wire.
+        resp = client.post(
+            "/canonicalize", json={"triangle": _triangle_payload(TAYLOR_ASHE)}, headers=AUTH
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert set(body) == {"triangleHash"}
+        assert body["triangleHash"] == triangle_hash(TAYLOR_ASHE)
+
+    def test_matches_lineage_triangle_hash_from_runs(self, client: TestClient) -> None:
+        # The whole point: the hash recorded at acceptance equals the hash a Run
+        # later stamps into Lineage, so re-derivation (4.7) and the diagnostics
+        # equality check never diverge.
+        canon = client.post(
+            "/canonicalize", json={"triangle": _triangle_payload(TAYLOR_ASHE)}, headers=AUTH
+        ).json()
+        runs = client.post("/runs", json=_run_body("run-hash", TAYLOR_ASHE), headers=AUTH).json()
+        assert canon["triangleHash"] == runs["resultSet"]["lineage"]["triangleHash"]
+
+    def test_malformed_triangle_is_422_bad_request(self, client: TestClient) -> None:
+        # Duplicate development labels is a container defect — the Triangle model
+        # rejects it at request-body validation, before any hash is computed.
+        duplicate = {
+            "kind": "paid",
+            "origin_periods": ["2001", "2002"],
+            "development_periods": ["12", "12"],  # duplicate → container defect
+            "cells": [[100.0, 200.0], [300.0, 400.0]],
+        }
+        resp = client.post("/canonicalize", json={"triangle": duplicate}, headers=AUTH)
+        assert resp.status_code == 422
+        assert resp.json()["code"] == "bad_request"

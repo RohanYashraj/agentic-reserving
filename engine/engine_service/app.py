@@ -21,8 +21,18 @@ from fastapi.responses import JSONResponse
 from engine_service.auth import make_service_auth
 from engine_service.config import Settings, load_settings
 from engine_service.errors import register_exception_handlers
-from engine_service.models import RunRequest, RunResponse, ValidateRequest
-from reserving_engine import compute_diagnostics, run_methods, validate_triangle
+from engine_service.models import (
+    CanonicalizeResponse,
+    RunRequest,
+    RunResponse,
+    ValidateRequest,
+)
+from reserving_engine import (
+    compute_diagnostics,
+    run_methods,
+    triangle_hash,
+    validate_triangle,
+)
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -37,6 +47,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def validate(request: ValidateRequest) -> JSONResponse:
         report = validate_triangle(request.triangle)
         return JSONResponse(content=report.model_dump(mode="json", by_alias=True))
+
+    @app.post("/canonicalize", dependencies=[auth])
+    def canonicalize(request: ValidateRequest) -> JSONResponse:
+        # Story 3.3: the acceptance-time Lineage Triangle hash (AD-11), single-
+        # sourced from the engine so it is byte-identical to the hash stamped
+        # into Lineage at /runs. Triangle construction (in ValidateRequest) is
+        # the structural backstop; no numbers are computed here (AD-1).
+        response = CanonicalizeResponse(triangle_hash=triangle_hash(request.triangle))
+        return JSONResponse(content=response.model_dump(mode="json", by_alias=True))
 
     @app.post("/runs", dependencies=[auth])
     def runs(request: RunRequest) -> JSONResponse:

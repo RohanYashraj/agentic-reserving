@@ -50,6 +50,19 @@ const publicFunctionArgs: Record<string, Record<string, unknown>> = {
   // triangleId is a v.id("triangles") validated before the guard runs — a real
   // row id is injected at call time (like createFromUpload's storageId).
   "triangles:validateTriangle": { workspaceId: "org_test" },
+  // acceptTriangle also validates its confirmedTriangle/periodMeta args before
+  // the guard runs; supply a minimally valid Triangle here, triangleId injected.
+  "triangles:acceptTriangle": {
+    workspaceId: "org_test",
+    confirmedTriangle: {
+      kind: "paid",
+      origin_periods: ["2019"],
+      development_periods: ["12"],
+      cells: [[100]],
+    },
+    periodMeta: { originGranularity: "annual", developmentInterval: "months" },
+  },
+  "triangles:getById": { workspaceId: "org_test" },
 };
 
 type Harness = TestConvex<SchemaDefinition<GenericSchema, boolean>>;
@@ -182,7 +195,11 @@ describe("auth-guard enumeration (NFR-3)", () => {
       if (path === "triangles:createFromUpload") {
         return { ...publicFunctionArgs[path], storageId };
       }
-      if (path === "triangles:validateTriangle") {
+      if (
+        path === "triangles:validateTriangle" ||
+        path === "triangles:acceptTriangle" ||
+        path === "triangles:getById"
+      ) {
         return { ...publicFunctionArgs[path], triangleId };
       }
       return publicFunctionArgs[path];

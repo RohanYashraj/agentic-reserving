@@ -180,6 +180,20 @@ export const validationReportValidator = v.object({
   findings: v.array(validationFindingValidator),
 });
 
+// --- CanonicalizeResponse (the /canonicalize response, Story 3.3) ---------
+
+/**
+ * The canonical-triangle-JSON sha256 — *the* Lineage Triangle hash (AD-11),
+ * ENGINE-computed (`reserving_engine.triangle_hash`) and returned by
+ * `POST /canonicalize`. camelCase `triangleHash`, matching `Lineage.triangleHash`.
+ * A one-field wire model (an `engine_service` response, not a `reserving_engine`
+ * core model), so it is validated Convex-side without a `schemas/*.json` entry —
+ * there is no meaningful drift surface on `{ triangleHash: string }`.
+ */
+export const canonicalizeResponseValidator = v.object({
+  triangleHash: v.string(),
+});
+
 // --- Inferred TS types (derived from the validators, drift-checked) ------
 
 export type ResultSet = Infer<typeof resultSetValidator>;
@@ -187,3 +201,4 @@ export type DiagnosticsBundle = Infer<typeof diagnosticsBundleValidator>;
 export type Triangle = Infer<typeof triangleValidator>;
 export type ValidationReport = Infer<typeof validationReportValidator>;
 export type ValidationFinding = Infer<typeof validationFindingValidator>;
+export type CanonicalizeResponse = Infer<typeof canonicalizeResponseValidator>;

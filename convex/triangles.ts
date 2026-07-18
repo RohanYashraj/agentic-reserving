@@ -8,7 +8,11 @@ import {
   mutation,
   query,
 } from "./_generated/server";
-import type { ValidationReport } from "./lib/engineContract";
+import type {
+  CanonicalizeResponse,
+  ValidationReport,
+} from "./lib/engineContract";
+import { triangleValidator } from "./lib/engineContract";
 import { callEngine } from "./lib/engineClient";
 import { requireMember } from "./lib/guards";
 import { parseTriangleGrid } from "./lib/triangleParse";
@@ -265,12 +269,19 @@ export const getForValidation = internalQuery({
 /**
  * Mark a Triangle validation_failed after engine findings. Clean passes leave
  * the status as pending_validation (the Triangle still awaits period
- * confirmation in 3.3). The Triangle is not yet accepted/immutable, so a status
- * patch is allowed here (immutability lands at acceptance in 3.3).
+ * confirmation in 3.3).
+ *
+ * Immutability guard (AD-3, Story 3.3): an ACCEPTED (`validated`) Triangle is
+ * frozen — never demote it to validation_failed. Re-validating an accepted
+ * Triangle (the function is public) must not alter its content, so skip the
+ * patch when it is already `validated`. This makes markValidationFailed one of
+ * the writers AC5 pins as unable to touch an accepted Triangle.
  */
 export const markValidationFailed = internalMutation({
   args: { triangleId: v.id("triangles") },
   handler: async (ctx, { triangleId }) => {
+    const row = await ctx.db.get(triangleId);
+    if (row === null || row.status === "validated") return;
     await ctx.db.patch(triangleId, { status: "validation_failed" });
   },
 });
@@ -352,6 +363,206 @@ export const validateTriangle = action({
     // clean pass (AC4) without a second query. This is the raw-file sha256 —
     // NOT the canonical-triangle-JSON Lineage hash (3.3 computes that).
     return { triangle, report, rawFileHash: t.rawFileHash };
+  },
+});
+
+// --- Story 3.3: period confirmation + Triangle acceptance --------------------
+
+const periodMetaValidator = v.object({
+  originGranularity: v.string(),
+  developmentInterval: v.string(),
+});
+
+/**
+ * Fetch the fields acceptTriangle needs. Internal (no guard) — the calling
+ * action re-checks tenancy against the returned workspaceId. `status` is
+ * returned so the action can fail fast; markAccepted re-reads it authoritatively.
+ */
+export const getForAcceptance = internalQuery({
+  args: { triangleId: v.id("triangles") },
+  handler: async (ctx, { triangleId }) => {
+    const row = await ctx.db.get(triangleId);
+    if (row === null) return null;
+    return {
+      workspaceId: row.workspaceId,
+      status: row.status,
+    };
+  },
+});
+
+/**
+ * Freeze a Triangle as accepted (Story 3.3, AC3, AC5). This is THE immutability
+ * boundary: the status gate below only ever moves `pending_validation → validated`
+ * and refuses every other starting status.
+ *
+ * Concurrency / idempotency: reading the row status into this mutation's read set
+ * means two concurrent accepts conflict under Convex OCC — the runtime retries the
+ * loser, which then observes `validated` and throws TRIANGLE_NOT_ACCEPTABLE. So a
+ * validated row can never be re-accepted or have its content/hash overwritten,
+ * and there is deliberately no other function that patches a validated row's
+ * content — that is what makes AC5 ("no mutation can alter an accepted Triangle")
+ * hold. Same read-into-read-set discipline as auditLogs.appendAuditEntry.
+ */
+export const markAccepted = internalMutation({
+  args: {
+    triangleId: v.id("triangles"),
+    triangleHash: v.string(),
+    acceptedTriangle: triangleValidator,
+    periodMeta: periodMetaValidator,
+    acceptedBy: v.string(),
+    acceptedAt: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const row = await ctx.db.get(args.triangleId);
+    if (row === null) {
+      throw new ConvexError({
+        code: "TRIANGLE_NOT_FOUND",
+        message: "That Triangle does not exist in this Workspace.",
+      });
+    }
+    if (row.status !== "pending_validation") {
+      // Refuses validation_failed AND already-validated (the immutability guard).
+      throw new ConvexError({
+        code: "TRIANGLE_NOT_ACCEPTABLE",
+        message:
+          "Only a validated-and-pending Triangle can be accepted. This Triangle is not in that state.",
+      });
+    }
+    await ctx.db.patch(args.triangleId, {
+      status: "validated",
+      triangleHash: args.triangleHash,
+      acceptedTriangle: args.acceptedTriangle,
+      periodMeta: args.periodMeta,
+      acceptedBy: args.acceptedBy,
+      acceptedAt: args.acceptedAt,
+    });
+  },
+});
+
+/**
+ * Accept a Triangle: confirm the user's periods, record the ENGINE-computed
+ * canonical-triangle-JSON Lineage hash, freeze the content, and audit (FR-3,
+ * AC1, AC3, AC5).
+ *
+ * An action: it makes the outbound engine calls (/validate re-check, /canonicalize)
+ * — only Convex may call the engine (AD-12) — and reaches the AD-6 writer via
+ * ctx.runMutation. The client sends the confirmed Triangle it already holds from
+ * validateTriangle (with the user's confirmed labels); cells pass through
+ * untouched (AD-1). We do NOT trust the client's word — the fail-closed /validate
+ * re-check and the status gate in markAccepted are the integrity backstops.
+ */
+export const acceptTriangle = action({
+  args: {
+    workspaceId: v.string(),
+    triangleId: v.id("triangles"),
+    confirmedTriangle: triangleValidator,
+    periodMeta: periodMetaValidator,
+  },
+  handler: async (
+    ctx,
+    { workspaceId, triangleId, confirmedTriangle, periodMeta },
+  ): Promise<{ status: "accepted"; triangleId: string; triangleHash: string }> => {
+    const { identity } = await requireMember(ctx, workspaceId);
+    const actor = identity.subject;
+
+    // Tenancy: requireMember proves membership in workspaceId; the triangleId
+    // arg is attacker-controllable, so confirm the row is in this Workspace.
+    const t = await ctx.runQuery(internal.triangles.getForAcceptance, { triangleId });
+    if (t === null || t.workspaceId !== workspaceId) {
+      throw new ConvexError({
+        code: "TRIANGLE_NOT_FOUND",
+        message: "That Triangle does not exist in this Workspace.",
+      });
+    }
+    // Fail fast on an un-acceptable status; markAccepted re-checks authoritatively.
+    if (t.status !== "pending_validation") {
+      throw new ConvexError({
+        code: "TRIANGLE_NOT_ACCEPTABLE",
+        message:
+          "Only a validated-and-pending Triangle can be accepted. This Triangle is not in that state.",
+      });
+    }
+
+    // Fail-closed validity re-check on the CONFIRMED-label Triangle. Labels are
+    // opaque to validation and cells are unchanged, but we never trust the client
+    // or the status alone — the engine is the authority. This also structurally
+    // validates the confirmed Triangle (duplicate/empty labels → engine 422 →
+    // mapped ConvexError). An invalid Triangle is never accepted.
+    const report = await callEngine<ValidationReport>("/validate", {
+      triangle: confirmedTriangle,
+    });
+    if (!report.valid) {
+      throw new ConvexError({
+        code: "TRIANGLE_INVALID",
+        message:
+          "This triangle no longer passes validation with the confirmed periods. Fix the source and re-upload.",
+      });
+    }
+
+    // Engine-computed canonical-triangle-JSON sha256 — THE Lineage hash (AD-11).
+    // Never reimplement this serialization in TypeScript: it must be byte-identical
+    // to the hash the engine stamps into Lineage at run time, or re-derivation
+    // (Story 4.7) and the diagnostics hash-equality check silently break.
+    const { triangleHash } = await callEngine<CanonicalizeResponse>("/canonicalize", {
+      triangle: confirmedTriangle,
+    });
+
+    const acceptedAt = new Date(Date.now()).toISOString();
+    await ctx.runMutation(internal.triangles.markAccepted, {
+      triangleId,
+      triangleHash,
+      acceptedTriangle: confirmedTriangle,
+      periodMeta,
+      acceptedBy: actor,
+      acceptedAt,
+    });
+
+    // Audit the acceptance (AD-6 — only appendAuditEntry writes auditLogs; never
+    // inline). Keep the payload lean — the full cell content lives on the row, not
+    // in the audit entry.
+    await ctx.runMutation(internal.auditLogs.appendAuditEntry, {
+      workspaceId,
+      actor,
+      eventType: "triangle.accepted",
+      payload: {
+        triangleId,
+        triangleHash,
+        originGranularity: periodMeta.originGranularity,
+        developmentInterval: periodMeta.developmentInterval,
+        originCount: confirmedTriangle.origin_periods.length,
+        developmentCount: confirmedTriangle.development_periods.length,
+      },
+    });
+
+    return { status: "accepted", triangleId, triangleHash };
+  },
+});
+
+/**
+ * A single Triangle by id, for the detail page (Story 3.3, AC4). Public →
+ * requireMember first; then a tenancy re-check (triangleId is attacker-
+ * controllable) returns null for a row outside this Workspace — existence never
+ * leaks. Returns the accepted content + both hashes when present.
+ */
+export const getById = query({
+  args: { workspaceId: v.string(), triangleId: v.id("triangles") },
+  handler: async (ctx, { workspaceId, triangleId }) => {
+    await requireMember(ctx, workspaceId);
+    const row = await ctx.db.get(triangleId);
+    if (row === null || row.workspaceId !== workspaceId) return null;
+    return {
+      _id: row._id,
+      label: row.label,
+      status: row.status,
+      filename: row.filename,
+      rawFileHash: row.rawFileHash,
+      triangleHash: row.triangleHash ?? null,
+      acceptedTriangle: row.acceptedTriangle ?? null,
+      periodMeta: row.periodMeta ?? null,
+      acceptedBy: row.acceptedBy ?? null,
+      acceptedAt: row.acceptedAt ?? null,
+      uploadedAt: row.uploadedAt,
+    };
   },
 });
 

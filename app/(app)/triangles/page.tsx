@@ -2,6 +2,7 @@
 
 import { useAuth } from "@clerk/nextjs";
 import { useQuery } from "convex/react";
+import Link from "next/link";
 import { useState } from "react";
 
 import {
@@ -65,7 +66,14 @@ export default function TrianglesPage() {
                   id={`triangle-${triangle._id}`}
                   className="border-b border-border/60 target:bg-caution-subtle"
                 >
-                  <td className="py-2 pr-4">{triangle.filename}</td>
+                  <td className="py-2 pr-4">
+                    <Link
+                      href={`/triangles/${triangle._id}`}
+                      className="text-primary hover:underline"
+                    >
+                      {triangle.filename}
+                    </Link>
+                  </td>
                   <td className="py-2 pr-4 capitalize">{triangle.label}</td>
                   <td className="py-2 pr-4">
                     <TriangleStatusIndicator

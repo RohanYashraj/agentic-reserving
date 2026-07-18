@@ -2,12 +2,18 @@
 
 import { useAction, useMutation } from "convex/react";
 import { ConvexError } from "convex/values";
-import { useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { TriangleGrid, cellKey } from "@/components/TriangleGrid";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import type { ValidationReport } from "@/convex/lib/engineContract";
+import {
+  detectPeriods,
+  type DevelopmentInterval,
+  type OriginGranularity,
+} from "@/convex/lib/periodDetection";
 import { cn } from "@/lib/utils";
 
 // UX-DR8 upload wizard: File → Validation → Periods. Named-stage inline
@@ -64,6 +70,7 @@ export function UploadWizard({ workspaceId }: { workspaceId: string }) {
   const generateUploadUrl = useMutation(api.triangles.generateUploadUrl);
   const createFromUpload = useAction(api.triangles.createFromUpload);
   const validateTriangle = useAction(api.triangles.validateTriangle);
+  const acceptTriangle = useAction(api.triangles.acceptTriangle);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [step, setStep] = useState<Step>("file");
@@ -235,16 +242,254 @@ export function UploadWizard({ workspaceId }: { workspaceId: string }) {
         </div>
       )}
 
-      {step === "periods" && (
-        <div className="mt-6 rounded-md border border-border p-6">
-          <h2 className="text-base font-semibold">Periods</h2>
-          <p className="mt-2 text-sm text-muted-foreground">
-            Period detection and confirmation arrive in the next story (3.3). Your
-            triangle passed validation and is ready for that step.
-          </p>
-        </div>
+      {step === "periods" && result && triangleId && (
+        <PeriodsStep
+          workspaceId={workspaceId}
+          triangleId={triangleId}
+          triangle={result.triangle}
+          onAccept={acceptTriangle}
+        />
       )}
     </section>
+  );
+}
+
+// --- Periods step (FR-3): detect → confirm → accept -------------------------
+
+const ORIGIN_OPTIONS: { value: OriginGranularity; label: string }[] = [
+  { value: "annual", label: "Annual" },
+  { value: "quarterly", label: "Quarterly" },
+  { value: "monthly", label: "Monthly" },
+];
+const DEV_OPTIONS: { value: DevelopmentInterval; label: string }[] = [
+  { value: "months", label: "Months" },
+  { value: "quarters", label: "Quarters" },
+  { value: "years", label: "Years" },
+];
+
+function labelsInvalidReason(labels: string[], axis: string): string | null {
+  const trimmed = labels.map((l) => l.trim());
+  if (trimmed.some((l) => l === "")) return `Every ${axis} needs a label.`;
+  if (new Set(trimmed).size !== trimmed.length)
+    return `Each ${axis} label must be unique.`;
+  return null;
+}
+
+function PeriodsStep({
+  workspaceId,
+  triangleId,
+  triangle,
+  onAccept,
+}: {
+  workspaceId: string;
+  triangleId: Id<"triangles">;
+  triangle: ValidateResult["triangle"];
+  onAccept: (args: {
+    workspaceId: string;
+    triangleId: Id<"triangles">;
+    confirmedTriangle: ValidateResult["triangle"];
+    periodMeta: { originGranularity: string; developmentInterval: string };
+  }) => Promise<{ status: "accepted"; triangleId: string; triangleHash: string }>;
+}) {
+  const detection = useMemo(
+    () => detectPeriods(triangle.origin_periods, triangle.development_periods),
+    [triangle.origin_periods, triangle.development_periods],
+  );
+
+  const [originLabels, setOriginLabels] = useState<string[]>(triangle.origin_periods);
+  const [devLabels, setDevLabels] = useState<string[]>(triangle.development_periods);
+  const [originGranularity, setOriginGranularity] = useState<OriginGranularity>(
+    detection.originGranularity,
+  );
+  const [developmentInterval, setDevelopmentInterval] = useState<DevelopmentInterval>(
+    detection.developmentInterval,
+  );
+
+  const [accepting, setAccepting] = useState(false);
+  const [acceptError, setAcceptError] = useState<{ message: string; engine: boolean } | null>(
+    null,
+  );
+  const [accepted, setAccepted] = useState<{ triangleId: string } | null>(null);
+
+  const originReason = labelsInvalidReason(originLabels, "origin period");
+  const devReason = labelsInvalidReason(devLabels, "development period");
+  const granularityChosen =
+    (ORIGIN_OPTIONS.some((o) => o.value === originGranularity) &&
+      DEV_OPTIONS.some((o) => o.value === developmentInterval)) as boolean;
+  const canAccept =
+    !originReason && !devReason && granularityChosen && !accepting && !accepted;
+
+  async function handleAccept() {
+    setAccepting(true);
+    setAcceptError(null);
+    try {
+      const res = await onAccept({
+        workspaceId,
+        triangleId,
+        confirmedTriangle: {
+          kind: triangle.kind,
+          origin_periods: originLabels.map((l) => l.trim()),
+          development_periods: devLabels.map((l) => l.trim()),
+          cells: triangle.cells,
+        },
+        periodMeta: { originGranularity, developmentInterval },
+      });
+      setAccepted({ triangleId: res.triangleId });
+    } catch (error) {
+      setAcceptError({ message: errorMessage(error), engine: isEngineError(error) });
+    } finally {
+      setAccepting(false);
+    }
+  }
+
+  if (accepted) {
+    return (
+      <div className="mt-6 rounded-md border border-border p-6" aria-live="polite">
+        <p className="text-sm font-medium text-published">Triangle accepted.</p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          It is now immutable and ready to run methods against.
+        </p>
+        <div className="mt-4 flex gap-4 text-sm">
+          <Link
+            href={`/triangles/${accepted.triangleId}`}
+            className="font-medium text-primary hover:underline"
+          >
+            View the Triangle
+          </Link>
+          <Link href="/triangles" className="text-muted-foreground hover:text-foreground">
+            Back to the library
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-6 space-y-6">
+      <div>
+        <h2 className="text-base font-semibold">Confirm the periods</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Detected structure below. Edit anything that looks wrong, then accept —
+          the Triangle becomes immutable once accepted.
+        </p>
+      </div>
+
+      {detection.ambiguous && (
+        <p className="rounded-md bg-caution-subtle px-3 py-2 text-sm text-caution">
+          {detection.reason ?? "Confirm the periods before accepting."}
+        </p>
+      )}
+
+      <div className="grid gap-6 sm:grid-cols-2">
+        <div>
+          <label className="text-sm font-medium" htmlFor="origin-granularity">
+            Origin-period granularity
+          </label>
+          <select
+            id="origin-granularity"
+            value={ORIGIN_OPTIONS.some((o) => o.value === originGranularity) ? originGranularity : ""}
+            onChange={(e) => setOriginGranularity(e.target.value as OriginGranularity)}
+            className="mt-1 block w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm"
+          >
+            <option value="" disabled>
+              Select…
+            </option>
+            {ORIGIN_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="text-sm font-medium" htmlFor="dev-interval">
+            Development-age interval
+          </label>
+          <select
+            id="dev-interval"
+            value={DEV_OPTIONS.some((o) => o.value === developmentInterval) ? developmentInterval : ""}
+            onChange={(e) => setDevelopmentInterval(e.target.value as DevelopmentInterval)}
+            className="mt-1 block w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm"
+          >
+            <option value="" disabled>
+              Select…
+            </option>
+            {DEV_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      <fieldset>
+        <legend className="text-sm font-medium">Origin period labels</legend>
+        <div className="mt-2 flex flex-wrap gap-2">
+          {originLabels.map((label, i) => (
+            <input
+              key={i}
+              aria-label={`Origin period ${i + 1}`}
+              value={label}
+              onChange={(e) =>
+                setOriginLabels((prev) => prev.map((l, j) => (j === i ? e.target.value : l)))
+              }
+              className="numeric w-24 rounded-md border border-border bg-background px-2 py-1 text-sm"
+            />
+          ))}
+        </div>
+        {originReason && <p className="mt-1 text-sm text-destructive">{originReason}</p>}
+      </fieldset>
+
+      <fieldset>
+        <legend className="text-sm font-medium">Development period ages</legend>
+        <div className="mt-2 flex flex-wrap gap-2">
+          {devLabels.map((label, i) => (
+            <input
+              key={i}
+              aria-label={`Development period ${i + 1}`}
+              value={label}
+              onChange={(e) =>
+                setDevLabels((prev) => prev.map((l, j) => (j === i ? e.target.value : l)))
+              }
+              className="numeric w-20 rounded-md border border-border bg-background px-2 py-1 text-sm"
+            />
+          ))}
+        </div>
+        {devReason && <p className="mt-1 text-sm text-destructive">{devReason}</p>}
+      </fieldset>
+
+      <TriangleGrid
+        kind={triangle.kind}
+        originPeriods={originLabels.map((l) => l.trim())}
+        developmentPeriods={devLabels.map((l) => l.trim())}
+        cells={triangle.cells}
+        showLatestDiagonal
+      />
+
+      {acceptError && (
+        <p
+          className={cn(
+            "rounded-md px-3 py-2 text-sm",
+            acceptError.engine
+              ? "border border-destructive/30 bg-destructive/5 text-destructive"
+              : "bg-destructive/10 text-destructive",
+          )}
+          aria-live="polite"
+        >
+          {acceptError.message}
+        </p>
+      )}
+
+      <button
+        type="button"
+        disabled={!canAccept}
+        onClick={handleAccept}
+        className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+      >
+        {accepting ? "Accepting…" : "Accept triangle"}
+      </button>
+    </div>
   );
 }
 

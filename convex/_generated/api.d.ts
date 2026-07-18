@@ -15,6 +15,7 @@ import type * as lib_clerkWebhook from "../lib/clerkWebhook.js";
 import type * as lib_engineClient from "../lib/engineClient.js";
 import type * as lib_engineContract from "../lib/engineContract.js";
 import type * as lib_guards from "../lib/guards.js";
+import type * as lib_periodDetection from "../lib/periodDetection.js";
 import type * as lib_schemaContract from "../lib/schemaContract.js";
 import type * as lib_triangleParse from "../lib/triangleParse.js";
 import type * as triangles from "../triangles.js";
@@ -33,6 +34,7 @@ declare const fullApi: ApiFromModules<{
   "lib/engineClient": typeof lib_engineClient;
   "lib/engineContract": typeof lib_engineContract;
   "lib/guards": typeof lib_guards;
+  "lib/periodDetection": typeof lib_periodDetection;
   "lib/schemaContract": typeof lib_schemaContract;
   "lib/triangleParse": typeof lib_triangleParse;
   triangles: typeof triangles;
