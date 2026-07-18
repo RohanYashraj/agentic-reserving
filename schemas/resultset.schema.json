@@ -206,6 +206,7 @@
             ],
             "type": "string"
           },
+          "minItems": 1,
           "title": "Methods",
           "type": "array"
         }

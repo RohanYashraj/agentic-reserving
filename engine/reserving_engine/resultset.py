@@ -31,7 +31,7 @@ stays "1.0.0" — versioning governance is Story 2.6's.
 import math
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic.alias_generators import to_camel
 
 _MODEL_CONFIG = ConfigDict(frozen=True, alias_generator=to_camel, populate_by_name=True)
@@ -87,8 +87,10 @@ class RunParameters(BaseModel):
 
     model_config = _MODEL_CONFIG
 
-    methods: tuple[Literal["chain_ladder", "bornhuetter_ferguson", "mack"], ...] = (
-        "chain_ladder",
+    # At least one Method: an empty run would assemble a ResultSet carrying
+    # zero reserve figures, which is never a valid Run outcome.
+    methods: tuple[Literal["chain_ladder", "bornhuetter_ferguson", "mack"], ...] = Field(
+        default=("chain_ladder",), min_length=1
     )
     apriori_loss_ratios: tuple[AprioriLossRatio, ...] = ()
 

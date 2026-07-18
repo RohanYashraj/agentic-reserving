@@ -17,7 +17,12 @@ from reserving_engine.diagnostics import (
     diagnostic_id,
     resolve_diagnostic,
 )
-from reserving_engine.methods import InvalidTriangleError, MissingAprioriError, run_methods
+from reserving_engine.methods import (
+    InvalidAprioriError,
+    InvalidTriangleError,
+    MissingAprioriError,
+    run_methods,
+)
 from reserving_engine.resultset import (
     AprioriLossRatio,
     DevelopmentFactor,
@@ -46,6 +51,7 @@ __all__ = [
     "ClBfDivergenceElement",
     "DevelopmentFactor",
     "DiagnosticsBundle",
+    "InvalidAprioriError",
     "InvalidTriangleError",
     "LdfStabilityElement",
     "Lineage",

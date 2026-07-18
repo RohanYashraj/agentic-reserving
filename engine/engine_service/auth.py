@@ -23,10 +23,17 @@ _BEARER_PREFIX = "Bearer "
 def make_service_auth(settings: Settings) -> Callable[[Request], None]:
     def require_service_auth(request: Request) -> None:
         header = request.headers.get("Authorization", "")
-        if not header.startswith(_BEARER_PREFIX):
+        # RFC 7235: the auth scheme is case-insensitive. Match on a
+        # fixed-width lowercased prefix so the token slice stays exact.
+        if header[: len(_BEARER_PREFIX)].lower() != _BEARER_PREFIX.lower():
             raise ServiceAuthError
         presented = header[len(_BEARER_PREFIX) :]
-        if not secrets.compare_digest(presented, settings.service_secret):
+        # Compare on bytes: ``secrets.compare_digest`` rejects non-ASCII
+        # ``str`` with a TypeError, so a hostile non-ASCII token would else
+        # escape as a 500 instead of failing closed as a 401.
+        if not secrets.compare_digest(
+            presented.encode("utf-8"), settings.service_secret.encode("utf-8")
+        ):
             raise ServiceAuthError
 
     return require_service_auth

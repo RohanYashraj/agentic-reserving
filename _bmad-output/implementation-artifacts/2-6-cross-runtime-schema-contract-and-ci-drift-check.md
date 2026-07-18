@@ -4,7 +4,7 @@ baseline_commit: a23cbdc
 
 # Story 2.6: Cross-Runtime Schema Contract and CI Drift Check
 
-Status: review
+Status: done
 
 ## Story
 
@@ -197,6 +197,10 @@ Claude (claude-opus-4-8) via BMad create-story + dev-story (Amelia)
 - README.md (modified — AD-10 cross-runtime schema contract subsection)
 - _bmad-output/implementation-artifacts/sprint-status.yaml (modified — story status)
 - _bmad-output/implementation-artifacts/2-6-cross-runtime-schema-contract-and-ci-drift-check.md (modified — this record)
+
+### Review Findings (Code Review 2026-07-18)
+
+- [x] [Review][Defer] The drift checker's type extractor handles `enum` but has no branch for Pydantic v2's single-value `Literal`, which serializes as `{"const": …}`. If any contract field ever becomes a single-value `Literal`, the extractor falls through to scalar `string` while the Convex side is `v.literal(...)` → `enum`, producing a spurious (fail-closed) drift failure. Add a `const` branch. — deferred, latent fragility [convex/lib/schemaContract.ts:58]
 
 ## Change Log
 

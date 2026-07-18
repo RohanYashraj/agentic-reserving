@@ -4,7 +4,7 @@ baseline_commit: 07b46b8
 
 # Story 2.5: engine_service FastAPI Shell with Service Auth
 
-Status: review
+Status: done
 
 ## Story
 
@@ -180,6 +180,12 @@ Claude (claude-opus-4-8) via BMad create-story + dev-story (Amelia)
 - README.md (modified — engine_service subsection + run command)
 - _bmad-output/implementation-artifacts/sprint-status.yaml (modified — story status)
 - _bmad-output/implementation-artifacts/2-5-engine-service-fastapi-shell-with-service-auth.md (modified — this record)
+
+### Review Findings (Code Review 2026-07-18)
+
+- [x] [Review][Patch] (fixed) Non-ASCII bearer token crashes auth: `secrets.compare_digest` requires ASCII-only `str` and raises `TypeError` on a latin-1-decoded header byte 0x80–0xFF → unhandled → 500 instead of the intended generic 401. Compare on `bytes` (encode both operands) or guard the exception. [engine/engine_service/auth.py:29]
+- [x] [Review][Patch] (fixed) Bearer scheme is matched case-sensitively (`startswith("Bearer ")`); RFC 7235 defines the auth scheme as case-insensitive, so a conformant `bearer <secret>` caller is rejected. Internal-only caller and fails closed, but brittle for a cross-runtime contract. [engine/engine_service/auth.py:26]
+- [x] [Review][Defer] `run_id` is only checked non-empty; it is joined verbatim into `dx:{runId}:{kind}:{key}`, so a `run_id` containing `:` yields structurally ambiguous Diagnostic IDs. Safe today (IDs resolve by dict lookup, never split), but the ID format is an AD-10 wire contract. — deferred, latent [engine/engine_service/models.py:35]
 
 ## Change Log
 

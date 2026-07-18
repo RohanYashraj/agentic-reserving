@@ -4,7 +4,7 @@ baseline_commit: e86fe49565583bb47139b0b057f17130ad5e78a4
 
 # Story 2.3: Bornhuetter-Ferguson and Mack Methods
 
-Status: review
+Status: done
 
 ## Story
 
@@ -186,6 +186,13 @@ Claude Fable 5 (claude-fable-5) via BMad dev-story (Amelia)
 - README.md (modified — engine subsection paragraph)
 - _bmad-output/implementation-artifacts/sprint-status.yaml (modified — story status)
 - _bmad-output/implementation-artifacts/2-3-bornhuetter-ferguson-and-mack-methods.md (modified — this record)
+
+### Review Findings (Code Review 2026-07-18)
+
+- [x] [Review][Patch] (fixed) Numerically-degenerate-but-valid triangle → uncaught 500 (resolved: reject in validation) — A Triangle with a zero cumulative cell in early development, or an all-zero development column, passes `validate_triangle` (0.0 is treated as a value by design) but makes chainladder emit a non-finite volume-weighted LDF (`X/0=inf`, `0/0=NaN`), which reaches `_require_finite` → `ValueError` → 500. **Decision (Rohan, 2026-07-18): reject in validation.** Add a `validate_triangle` finding for any column whose volume-weighted denominator is zero (would produce a non-finite factor), yielding a cell-level `InvalidTriangleError` → clean 422 at the Triangle boundary. [engine/reserving_engine/validation.py]
+- [x] [Review][Patch] (fixed) Duplicate / Triangle-unknown a-priori origin raises a bare `ValueError` (not a registered domain error) → 500 with no envelope, while the sibling missing-apriori path returns a clean 422. Raise a typed error or register a handler. [engine/reserving_engine/methods.py:264]
+- [x] [Review][Patch] (fixed) Mack `total_mack_std_err` is passed to `MethodResult` without the `pd.isna → 0.0` guard applied two lines above to the per-origin `std_err`; a thin/degenerate triangle yields a NaN total → `_require_finite_or_none` raises → 500. Mirror the existing guard. [engine/reserving_engine/methods.py:243]
+- [x] [Review][Patch] (fixed) `RunParameters.methods` has no minimum length; `methods=()` produces a schema-valid ResultSet carrying zero reserve figures. Enforce ≥1 method (or reject at the boundary). [engine/reserving_engine/resultset.py:90]
 
 ## Change Log
 

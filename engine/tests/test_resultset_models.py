@@ -64,6 +64,12 @@ class TestConstruction:
         with pytest.raises(ValidationError):
             RunParameters(methods=("cape_cod",))
 
+    def test_empty_methods_rejected(self):
+        # An empty run would assemble a ResultSet carrying zero reserve
+        # figures — never a valid Run outcome.
+        with pytest.raises(ValidationError):
+            RunParameters(methods=())
+
     def test_all_three_v1_methods_accepted(self):
         params = RunParameters(methods=("chain_ladder", "bornhuetter_ferguson", "mack"))
         assert params.methods == ("chain_ladder", "bornhuetter_ferguson", "mack")

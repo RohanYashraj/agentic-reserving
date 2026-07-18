@@ -89,6 +89,26 @@ class TestAuth:
         resp = client.post(path, json={}, headers={"Authorization": f"Basic {TEST_SECRET}"})
         assert resp.status_code == 401
 
+    @pytest.mark.parametrize("path", ["/validate", "/runs"])
+    def test_non_ascii_token_is_401_not_500(self, client: TestClient, path: str) -> None:
+        # A non-ASCII bearer token must fail closed as 401 — never crash the
+        # constant-time compare (TypeError) into an unhandled 500. Sent as raw
+        # bytes to bypass the client's ASCII header guard, as a hostile caller
+        # on the wire would (Starlette decodes headers as latin-1).
+        resp = client.post(path, json={}, headers={"Authorization": b"Bearer \xffbad"})
+        assert resp.status_code == 401
+        assert resp.json()["code"] == "unauthorized"
+
+    def test_bearer_scheme_is_case_insensitive(self, client: TestClient) -> None:
+        # RFC 7235: the auth scheme is case-insensitive; a correct secret with
+        # a lowercase scheme is accepted, not rejected.
+        resp = client.post(
+            "/validate",
+            json={"triangle": _triangle_payload(TAYLOR_ASHE)},
+            headers={"Authorization": f"bearer {TEST_SECRET}"},
+        )
+        assert resp.status_code == 200
+
     def test_401_body_never_echoes_presented_token(self, client: TestClient) -> None:
         secret_guess = "super-secret-guess-9000"
         resp = client.post(
@@ -205,6 +225,22 @@ class TestValidationPassthrough:
         missing = body["details"]["missingOrigins"]
         assert set(missing) == set(TAYLOR_ASHE.origin_periods)
         assert "2001" in body["message"]
+
+    def test_runs_unknown_apriori_is_422_envelope_not_500(self, client: TestClient) -> None:
+        # A malformed a-priori set (origin absent from the Triangle) must ride
+        # the same envelope as its missing-a-priori sibling, never a bare 500.
+        stranger = AprioriLossRatio(origin="1999", loss_ratio=0.9, exposure=5_000_000.0)
+        params = RunParameters(
+            methods=("bornhuetter_ferguson",), apriori_loss_ratios=BF_APRIORIS + (stranger,)
+        )
+        resp = client.post(
+            "/runs", json=_run_body("run-stranger", TAYLOR_ASHE, params), headers=AUTH
+        )
+        assert resp.status_code == 422
+        body = resp.json()
+        assert body["code"] == "invalid_apriori"
+        assert body["details"]["origins"] == ["1999"]
+        assert set(body) == {"code", "message", "details"}
 
 
 # --------------------------------------------------------------------------- #

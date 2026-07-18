@@ -4,7 +4,7 @@ baseline_commit: b8d094f
 
 # Story 2.4: Diagnostics Computation with Diagnostic IDs
 
-Status: review
+Status: done
 
 ## Story
 
@@ -186,6 +186,11 @@ Claude (claude-opus-4-8) via BMad dev-story (Amelia)
 - README.md (modified — engine subsection paragraph)
 - _bmad-output/implementation-artifacts/sprint-status.yaml (modified — story status)
 - _bmad-output/implementation-artifacts/2-4-diagnostics-computation-with-diagnostic-ids.md (modified — this record)
+
+### Review Findings (Code Review 2026-07-18)
+
+- [x] [Review][Patch] (fixed with 2.3) Non-finite LDF from a zero cumulative cell also crashes diagnostics. Resolved with 2.3 by rejecting such triangles in `validate_triangle` (422) — once validation rejects them, diagnostics never sees the non-finite factor. No separate diagnostics change needed. [engine/reserving_engine/diagnostics.py:285]
+- [x] [Review][Defer] Diagnostics recompute `expected` and `selected_factor` from a fresh default `cl.Development().fit()` rather than reading the authoritative LDFs from the ResultSet. Bit-identical today (CL uses default Development), but a silent divergence if a Run's CL ever uses non-default development settings. Prefer reading factors from `result_set.method_results`. — deferred, latent coupling [engine/reserving_engine/diagnostics.py:274]
 
 ## Change Log
 

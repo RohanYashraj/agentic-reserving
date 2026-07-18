@@ -14,7 +14,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from reserving_engine import InvalidTriangleError, MissingAprioriError
+from reserving_engine import InvalidAprioriError, InvalidTriangleError, MissingAprioriError
 
 
 class ServiceAuthError(Exception):
@@ -63,6 +63,15 @@ def register_exception_handlers(app: FastAPI) -> None:
             "missing_apriori",
             str(exc),
             {"missingOrigins": list(exc.missing_origins)},
+        )
+
+    @app.exception_handler(InvalidAprioriError)
+    async def _invalid_apriori(_request: Request, exc: InvalidAprioriError) -> JSONResponse:
+        return _envelope(
+            422,
+            "invalid_apriori",
+            str(exc),
+            {"origins": list(exc.origins)},
         )
 
     @app.exception_handler(RequestValidationError)

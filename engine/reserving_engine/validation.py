@@ -27,7 +27,7 @@ from pydantic import BaseModel, ConfigDict, model_validator
 
 from reserving_engine.triangle import Triangle
 
-FindingCode = Literal["shape", "paid_monotonicity", "missing_cell"]
+FindingCode = Literal["shape", "paid_monotonicity", "missing_cell", "degenerate_factor"]
 
 
 class ValidationFinding(BaseModel):
@@ -129,5 +129,36 @@ def validate_triangle(triangle: Triangle) -> ValidationReport:
                     ),
                 )
             )
+
+    # Degenerate development columns: the volume-weighted age-to-age factor
+    # for a transition is sum(next) / sum(prev) over the origins observed at
+    # both ends. A zero denominator (an all-zero cumulative column, or a
+    # single contributing origin with a zero cell) yields a non-finite LDF
+    # downstream, which the Methods cannot represent. Reject it here with a
+    # cell-level finding rather than letting it surface as a 500 (decision
+    # 2026-07-18: reject in validation, not map a non-finite result). Only
+    # meaningful once the observed region is well-formed, so skip when any
+    # structural/hole defect was already found for the affected rows.
+    if not findings:
+        for j in range(len(devs) - 1):
+            contributors = [i for i, length in enumerate(lengths) if length >= j + 2]
+            if not contributors:
+                continue
+            denominator = sum(
+                cell for i in contributors if (cell := triangle.cells[i][j]) is not None
+            )
+            if denominator == 0:
+                findings.append(
+                    ValidationFinding(
+                        origin=origins[contributors[0]],
+                        dev=devs[j],
+                        code="degenerate_factor",
+                        reason=(
+                            f"development transition {devs[j]}→{devs[j + 1]} has a zero "
+                            f"cumulative total across observed origins; its age-to-age "
+                            f"factor is undefined"
+                        ),
+                    )
+                )
 
     return ValidationReport(valid=not findings, findings=tuple(findings))

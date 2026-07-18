@@ -61,6 +61,20 @@ class MissingAprioriError(ValueError):
         )
 
 
+class InvalidAprioriError(ValueError):
+    """Raised when the a-priori set is itself malformed at the boundary.
+
+    A duplicated Origin Period, or an A Priori Loss Ratio naming an Origin
+    Period absent from the Triangle (FR-4). A caller-input defect — mapped
+    to the same envelope as the missing-a-priori sibling, never a bare 500.
+    The offending Origin Period labels are on ``.origins``.
+    """
+
+    def __init__(self, reason: str, origins: tuple[str, ...]) -> None:
+        self.origins = origins
+        super().__init__(reason)
+
+
 def _to_long_dataframe(triangle: Triangle) -> pd.DataFrame:
     """Observed cells as a long frame with synthetic positional periods.
 
@@ -236,11 +250,19 @@ def _run_mack(triangle: Triangle, parameters: RunParameters) -> MethodResult:
             )
         )
 
+    # As with the per-origin std err, a fully-developed / non-estimable
+    # total (thin triangle, one link ratio per transition) prints NaN in
+    # chainladder; treat it as zero remaining variance rather than letting
+    # the non-finite value fail ResultSet construction.
+    total_std_err = float(model.total_mack_std_err_.iloc[0, 0])
+    if pd.isna(total_std_err):
+        total_std_err = 0.0
+
     return MethodResult(
         method="mack",
         development_factors=_extract_development_factors(triangle, model),
         origin_results=tuple(origin_results),
-        total_mack_std_err=float(model.total_mack_std_err_.iloc[0, 0]),
+        total_mack_std_err=total_std_err,
     )
 
 
@@ -261,15 +283,19 @@ def _check_aprioris(triangle: Triangle, parameters: RunParameters) -> None:
     seen: set[str] = set()
     for apriori in parameters.apriori_loss_ratios:
         if apriori.origin in seen:
-            raise ValueError(f"duplicate A Priori Loss Ratio for Origin Period {apriori.origin}")
+            raise InvalidAprioriError(
+                f"duplicate A Priori Loss Ratio for Origin Period {apriori.origin}",
+                (apriori.origin,),
+            )
         seen.add(apriori.origin)
 
     known = set(triangle.origin_periods)
     unknown = tuple(a.origin for a in parameters.apriori_loss_ratios if a.origin not in known)
     if unknown:
-        raise ValueError(
+        raise InvalidAprioriError(
             "A Priori Loss Ratio(s) name Origin Period(s) not in the Triangle: "
-            f"{', '.join(unknown)}"
+            f"{', '.join(unknown)}",
+            unknown,
         )
 
     if "bornhuetter_ferguson" in parameters.methods:

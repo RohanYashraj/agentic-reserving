@@ -20,7 +20,11 @@ from reserving_engine import (
 
 # --- strategies -------------------------------------------------------------
 
-amounts = st.floats(min_value=0.0, max_value=1e9, allow_nan=False, allow_infinity=False)
+# Strictly positive: a development column whose observed cumulative total is
+# zero has an undefined age-to-age factor and is rejected by validate_triangle
+# (degenerate_factor), so a *domain-valid* generated Triangle must avoid it.
+# Zero cells / zero movement are exercised by the example-based tests below.
+amounts = st.floats(min_value=1.0, max_value=1e9, allow_nan=False, allow_infinity=False)
 
 
 @st.composite
@@ -146,9 +150,12 @@ def test_extended_newer_prefix_reported_as_shape(data):
 @given(valid_triangles(kind="incurred", min_devs=2, full_only=True), st.data())
 def test_incurred_decrease_is_not_flagged(t, data):
     # OQ-6: incurred can legitimately decrease (case-reserve releases).
+    # Halve rather than subtract a flat amount so the decreased cell stays
+    # strictly positive — a zeroed cell would be a legitimate but separate
+    # degenerate-column rejection, not the monotonicity behaviour under test.
     i = data.draw(st.integers(0, len(t.origin_periods) - 1))
     j = data.draw(st.integers(1, len(t.development_periods) - 1))
-    mutated = replace_cell(t, i, j, t.cells[i][j - 1] - 1.0)
+    mutated = replace_cell(t, i, j, t.cells[i][j - 1] / 2.0)
     report = validate_triangle(mutated)
     assert report.valid is True
     assert report.findings == ()
@@ -213,9 +220,20 @@ def test_full_rectangle_valid():
 
 
 def test_zero_valued_cell_is_not_missing():
-    # A genuine 0.0 cell is a value — never confuse falsy with missing.
-    report = validate_triangle(paid([[0.0, 0.0], [0.0, None]]))
+    # A genuine 0.0 cell is a value — never confuse falsy with missing. The
+    # older origin carries a positive column total, so no degenerate rejection.
+    report = validate_triangle(paid([[100.0, 200.0], [0.0, None]]))
     assert report.valid is True
+
+
+def test_zero_development_column_is_degenerate():
+    # An all-zero cumulative column across observed origins has an undefined
+    # age-to-age factor; reject it in validation (422) rather than let a
+    # non-finite factor surface as an uncaught 500 (decision 2026-07-18).
+    report = validate_triangle(paid([[0.0, 5.0], [0.0, None]]))
+    assert report.valid is False
+    assert [f.code for f in report.findings] == ["degenerate_factor"]
+    assert (report.findings[0].origin, report.findings[0].dev) == ("O0", "D0")
 
 
 def test_empty_row_is_shape_finding():

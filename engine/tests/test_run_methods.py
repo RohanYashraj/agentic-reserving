@@ -12,6 +12,7 @@ import pytest
 from reserving_engine import (
     ENGINE_VERSION,
     AprioriLossRatio,
+    InvalidAprioriError,
     InvalidTriangleError,
     MissingAprioriError,
     ResultSet,
@@ -185,8 +186,9 @@ class TestMissingApriori:
             methods=("bornhuetter_ferguson",),
             apriori_loss_ratios=SMALL_APRIORIS + (SMALL_APRIORIS[0],),
         )
-        with pytest.raises(ValueError, match="2021"):
+        with pytest.raises(InvalidAprioriError, match="2021") as exc_info:
             run_methods(SMALL_TRIANGLE, params)
+        assert exc_info.value.origins == ("2021",)
 
     def test_unknown_apriori_origin_rejected(self):
         stranger = AprioriLossRatio(origin="1999", loss_ratio=0.9, exposure=200.0)
@@ -194,8 +196,13 @@ class TestMissingApriori:
             methods=("bornhuetter_ferguson",),
             apriori_loss_ratios=SMALL_APRIORIS + (stranger,),
         )
-        with pytest.raises(ValueError, match="1999"):
+        with pytest.raises(InvalidAprioriError, match="1999") as exc_info:
             run_methods(SMALL_TRIANGLE, params)
+        assert exc_info.value.origins == ("1999",)
+
+    def test_invalid_apriori_error_is_a_value_error(self):
+        # Same envelope family as the other boundary a-priori error.
+        assert issubclass(InvalidAprioriError, ValueError)
 
 
 class TestBornhuetterFerguson:
