@@ -32,6 +32,13 @@ export default function RunDetailPage() {
     api.runs.getRun,
     orgId ? { workspaceId: orgId, runId } : "skip",
   );
+  // Second, immutable-once-stored subscription: the ResultSet figures. Gated on
+  // hasResults so no figures are fetched before the Run completes (AC5); the
+  // ResultSet never churns once stored (Story 4.4).
+  const resultSet = useQuery(
+    api.runs.getResultSet,
+    orgId && run?.hasResults ? { workspaceId: orgId, runId } : "skip",
+  );
   const retryRun = useMutation(api.runs.retryRun);
 
   const [retryError, setRetryError] = useState<string | null>(null);
@@ -75,7 +82,11 @@ export default function RunDetailPage() {
           )}
 
           <div className="mt-6">
-            <RunDetail run={run} onRetry={onRetry} />
+            <RunDetail
+              run={run}
+              resultSet={resultSet ?? null}
+              onRetry={onRetry}
+            />
           </div>
         </>
       )}

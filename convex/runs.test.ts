@@ -974,6 +974,56 @@ describe("getRun — lean projection + tenancy (AC6)", () => {
   });
 });
 
+describe("getResultSet — verbatim figure read surface (AC4, AC5)", () => {
+  test("complete run → the stored ResultSet returned verbatim (no re-shaping)", async () => {
+    const t = initConvexTest();
+    const triangleId = await seedValidatedTriangle(t);
+    const runId = await seedCompleteRun(t, triangleId);
+
+    const resultSet = await t
+      .withIdentity(analystA)
+      .query(api.runs.getResultSet, { workspaceId: "org_A", runId });
+
+    // Deep-equal the exact fixture seedCompleteRun stored — nothing dropped or
+    // re-keyed (AC3 verbatim: the query cannot introduce a derived number).
+    expect(resultSet).toEqual(makeResultSet(TRIANGLE_HASH, ["chain_ladder", "mack"]));
+    // Spot-check the Mack figures survive (present, not stripped).
+    const mack = resultSet?.methodResults.find((m) => m.method === "mack");
+    expect(mack?.originResults[0].mackStdErr).toBe(3.2);
+    expect(mack?.originResults[0].reserveLow).toBe(190);
+    expect(mack?.originResults[0].reserveHigh).toBe(210);
+    expect(mack?.totalMackStdErr).toBe(5.1);
+    // Full lineage present for the provenance popover.
+    expect(resultSet?.lineage.engineVersion).toBe("0.1.0");
+    expect(resultSet?.lineage.chainladderVersion).toBe("0.9.2");
+    expect(resultSet?.lineage.triangleHash).toBe(TRIANGLE_HASH);
+  });
+
+  test("queued / running / failed run → null (no resultSet stored)", async () => {
+    const t = initConvexTest();
+    const triangleId = await seedValidatedTriangle(t);
+    for (const status of ["queued", "running", "failed"] as const) {
+      const runId = await seedRun(t, triangleId, status);
+      const resultSet = await t
+        .withIdentity(analystA)
+        .query(api.runs.getResultSet, { workspaceId: "org_A", runId });
+      expect(resultSet).toBeNull();
+    }
+  });
+
+  test("a complete run in another Workspace → null (existence never leaks)", async () => {
+    const t = initConvexTest();
+    const triangleId = await seedValidatedTriangle(t, "org_A");
+    const runId = await seedCompleteRun(t, triangleId);
+
+    const resultSet = await t
+      .withIdentity(analystB)
+      .query(api.runs.getResultSet, { workspaceId: "org_B", runId });
+
+    expect(resultSet).toBeNull();
+  });
+});
+
 describe("retryRun — idempotent re-entry (AC4, AC6)", () => {
   test("failed → queued, fields cleared, run.retried appended, chain valid", async () => {
     const t = initConvexTest();

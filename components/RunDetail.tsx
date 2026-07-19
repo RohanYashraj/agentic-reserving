@@ -2,12 +2,13 @@
 
 import { useState, type ReactNode } from "react";
 
+import { ResultsGrid } from "@/components/ResultsGrid";
 import { StatusBadge } from "@/components/StatusBadge";
 import { StepRail, type RunStatus } from "@/components/StepRail";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { methodLabel } from "@/components/methods";
 import type { Id } from "@/convex/_generated/dataModel";
-import type { Method } from "@/convex/lib/engineContract";
+import type { Method, ResultSet } from "@/convex/lib/engineContract";
 
 // Story 4.3 (AC2/3/4): the live Run-detail body. Status badge + per-Method
 // progress rows in an aria-live region + the golden-path step rail + four tabs
@@ -61,9 +62,11 @@ function TabPlaceholder({ children }: { children: ReactNode }) {
 
 export function RunDetail({
   run,
+  resultSet,
   onRetry,
 }: {
   run: RunView;
+  resultSet?: ResultSet | null;
   onRetry: () => Promise<void> | void;
 }) {
   const [tab, setTab] = useState<TabKey>("results");
@@ -155,11 +158,15 @@ export function RunDetail({
         </TabsList>
 
         <TabsContent value="results">
-          <TabPlaceholder>
-            {run.hasResults
-              ? "Results render in a later story (4.4)."
-              : "Results appear once the Run completes."}
-          </TabPlaceholder>
+          {resultSet ? (
+            <ResultsGrid resultSet={resultSet} runId={run._id} />
+          ) : (
+            <TabPlaceholder>
+              {run.hasResults
+                ? "Loading results…"
+                : "Results appear once the Run completes."}
+            </TabPlaceholder>
+          )}
         </TabsContent>
 
         <TabsContent value="diagnostics">

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { formatFigure } from "@/lib/formatNumber";
 import { cn } from "@/lib/utils";
 
 // UX-DR5 Triangle grid: dense read-only numeric grid, Geist Mono right-aligned
@@ -31,10 +32,9 @@ export interface TriangleGridProps {
   onCellFocus?: (key: string) => void;
 }
 
-const numberFormat = new Intl.NumberFormat("en-US");
-
+// Triangle holes render blank (not "—"): pass "" as the null text.
 function formatValue(value: number | null): string {
-  return value === null ? "" : numberFormat.format(value);
+  return formatFigure(value, "");
 }
 
 /** Index of the last observed (non-null) cell in a row, or -1 if none. */

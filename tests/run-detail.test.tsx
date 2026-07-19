@@ -22,6 +22,7 @@ vi.mock("next/link", () => ({
 
 import { RunDetail, type RunView } from "@/components/RunDetail";
 import type { Id } from "@/convex/_generated/dataModel";
+import type { ResultSet } from "@/convex/lib/engineContract";
 
 afterEach(cleanup);
 
@@ -40,6 +41,35 @@ function makeRun(overrides: Partial<RunView> = {}): RunView {
     hasResults: false,
     hasDiagnostics: false,
     ...overrides,
+  };
+}
+
+function makeResultSet(): ResultSet {
+  return {
+    schemaVersion: "1.0.0",
+    lineage: {
+      engineVersion: "0.1.0",
+      chainladderVersion: "0.9.2",
+      triangleHash: "a".repeat(64),
+      parameters: { methods: ["chain_ladder"], aprioriLossRatios: [] },
+    },
+    methodResults: [
+      {
+        method: "chain_ladder",
+        developmentFactors: [{ fromDev: "12", toDev: "24", factor: 1.5 }],
+        originResults: [
+          {
+            origin: "2019",
+            ultimate: 4213000,
+            ibnr: 25000,
+            mackStdErr: null,
+            reserveLow: null,
+            reserveHigh: null,
+          },
+        ],
+        totalMackStdErr: null,
+      },
+    ],
   };
 }
 
@@ -97,14 +127,48 @@ describe("RunDetail (AC2, AC3, AC4)", () => {
       />,
     );
 
-    // Results is the default tab.
-    expect(screen.getByText(/Results render in a later story/i)).toBeDefined();
+    // Results is the default tab; with figures not yet fetched it shows the
+    // brief loading state (not the obsolete "later story" text).
+    expect(screen.getByText(/Loading results/i)).toBeDefined();
 
     // The step rail's Diagnostics step (a button on a complete run) switches tabs.
     fireEvent.click(screen.getByRole("button", { name: "Diagnostics" }));
     expect(
       screen.getByText(/Diagnostics render in a later story/i),
     ).toBeDefined();
+  });
+
+  it("complete run with a ResultSet renders the Results grid (AC1)", () => {
+    render(
+      <RunDetail
+        run={makeRun({
+          status: "complete",
+          hasResults: true,
+          hasDiagnostics: true,
+          completedAt: "2026-07-19T00:00:02.000Z",
+        })}
+        resultSet={makeResultSet()}
+        onRetry={vi.fn()}
+      />,
+    );
+
+    // The Results tab is default; the stored ultimate renders verbatim,
+    // display-formatted (4,213,000) — no arithmetic.
+    expect(screen.getByText("4,213,000")).toBeDefined();
+    expect(screen.getByText("25,000")).toBeDefined();
+    // No synthesized total row.
+    expect(screen.queryByText(/total ibnr/i)).toBeNull();
+  });
+
+  it("hasResults but no resultSet yet → loading placeholder, no figures", () => {
+    render(
+      <RunDetail
+        run={makeRun({ status: "complete", hasResults: true })}
+        resultSet={null}
+        onRetry={vi.fn()}
+      />,
+    );
+    expect(screen.getByText(/Loading results/i)).toBeDefined();
   });
 
   it("no polling primitive: the component has no interval/timeout-based refetch (FR-20)", () => {

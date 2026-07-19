@@ -478,6 +478,31 @@ export const getRun = query({
 });
 
 /**
+ * The stored ResultSet for one Run, verbatim — the figure read surface Story
+ * 4.3's `getRun` deliberately deferred ("the figures arrive in 4.4–4.6"). This
+ * is where reserve figures leave Convex; `getRun` stays lean (no figures), and
+ * the Results tab subscribes here ONLY when `hasResults` (Story 4.4).
+ *
+ * Public → requireMember first (AD-4); then the same tenancy re-check as
+ * `getRun` returns `null` for a row outside this Workspace (existence never
+ * leaks). Returns `run.resultSet` UNCHANGED — no projection, no re-keying — so
+ * "every figure is a value from the stored ResultSet verbatim" (AC3) holds by
+ * construction. A queued/running/failed Run has no `resultSet` → `null`.
+ *
+ * AD-1: this query only READS and RETURNS engine figures; it performs no
+ * arithmetic. Display formatting (thousands grouping) is the React layer's job.
+ */
+export const getResultSet = query({
+  args: { workspaceId: v.string(), runId: v.id("runs") },
+  handler: async (ctx, { workspaceId, runId }) => {
+    await requireMember(ctx, workspaceId);
+    const run = await ctx.db.get(runId);
+    if (run === null || run.workspaceId !== workspaceId) return null;
+    return run.resultSet ?? null;
+  },
+});
+
+/**
  * Idempotent "Retry run" (Story 4.3, AC4/6) — the one new status writer Story
  * 4.2 anticipated ("that's 4.3's idempotent 'Retry run' UI, which will re-enter
  * this same orchestration"). The runs record stays the sole status authority
