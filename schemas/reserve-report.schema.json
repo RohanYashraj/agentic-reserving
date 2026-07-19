@@ -1,0 +1,64 @@
+{
+  "$defs": {
+    "ReserveReportSection": {
+      "description": "One section of the drafted Reserve Report, post-Provenance-Gate.\n\n``text`` is the RENDERED section prose (post-gate: ``{{dx:...}}``\nplaceholders already rendered to citation markers, any ``{{rs:...}}``\nfigure rendered to its display value). ``citations`` is the tuple of\nresolved Diagnostic IDs the section cites \u2014 the machine-readable pin\nfor the 5.5/Epic-6 CitationChip. It is the resolved-``{{dx:...}}`` id\nlist from the gate's ``GateAccepted.citations``, NEVER re-parsed from\n``text``.\n\n``citations`` MAY be empty for a purely-qualitative section (e.g. a\nlimitations caveat with no figure): the gate's per-block\n``uncited_claim`` rule already forces a citation on any block that\nstates a figure, at the granularity that matters (see the story Dev\nNotes \u00a7Section citation minima). This is the one divergence from\n``RecommendationReason`` (which requires \u22651 citation).",
+      "properties": {
+        "citations": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Citations",
+          "type": "array"
+        },
+        "text": {
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text",
+        "citations"
+      ],
+      "title": "ReserveReportSection",
+      "type": "object"
+    }
+  },
+  "description": "The complete, self-describing Reserve Report document for one Run.\n\nThe **four sections are NAMED fields** \u2014 executive summary, method\nselection rationale, movement commentary, limitations (FR-11) \u2014 so\n\"exactly the four sections, all present\" is structural-by-construction:\nPydantic requires all four, and a missing section cannot form a\n``ReserveReport``.\n\n``run_id`` is the correlation key (must equal the request's runId / the\nbundle's ``run_id``). ``machine_drafted`` marks the AC-3 \"machine-drafted\nprovenance\" (True for this story's agent path \u2014 Epic 6 human edits\nflip/version it, out of scope here).",
+  "properties": {
+    "executiveSummary": {
+      "$ref": "#/$defs/ReserveReportSection"
+    },
+    "limitations": {
+      "$ref": "#/$defs/ReserveReportSection"
+    },
+    "machineDrafted": {
+      "default": true,
+      "title": "Machinedrafted",
+      "type": "boolean"
+    },
+    "methodSelectionRationale": {
+      "$ref": "#/$defs/ReserveReportSection"
+    },
+    "movementCommentary": {
+      "$ref": "#/$defs/ReserveReportSection"
+    },
+    "runId": {
+      "title": "Runid",
+      "type": "string"
+    },
+    "schemaVersion": {
+      "default": "1.0.0",
+      "title": "Schemaversion",
+      "type": "string"
+    }
+  },
+  "required": [
+    "runId",
+    "executiveSummary",
+    "methodSelectionRationale",
+    "movementCommentary",
+    "limitations"
+  ],
+  "title": "ReserveReport",
+  "type": "object"
+}

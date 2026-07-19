@@ -17,6 +17,7 @@ import {
   diagnosticsBundleValidator,
   reDerivationReportValidator,
   recommendationsValidator,
+  reserveReportValidator,
   resultSetValidator,
   triangleValidator,
   validationReportValidator,
@@ -38,6 +39,7 @@ const triangleSchema = readSchema("triangle.schema.json");
 const validationReportSchema = readSchema("validation-report.schema.json");
 const reDerivationReportSchema = readSchema("rederivation-report.schema.json");
 const recommendationsSchema = readSchema("recommendations.schema.json");
+const reserveReportSchema = readSchema("reserve-report.schema.json");
 
 describe("AD-10 cross-runtime drift check", () => {
   it("ResultSet: committed JSON Schema matches the Convex validator", () => {
@@ -92,6 +94,18 @@ describe("AD-10 cross-runtime drift check", () => {
       recommendationsSchema,
     );
     const fromValidator = validatorToCanonical(recommendationsValidator);
+    expect(diffCanonical(fromSchema, fromValidator)).toEqual([]);
+  });
+
+  it("ReserveReport: committed JSON Schema matches the Convex validator", () => {
+    // Story 5.4: the accepted /reports document persisted in the reserveReports
+    // table. The four sections are named object fields; `machineDrafted` is a
+    // boolean — canonicalizes identically on both sides.
+    const fromSchema = jsonSchemaToCanonical(
+      reserveReportSchema,
+      reserveReportSchema,
+    );
+    const fromValidator = validatorToCanonical(reserveReportValidator);
     expect(diffCanonical(fromSchema, fromValidator)).toEqual([]);
   });
 });

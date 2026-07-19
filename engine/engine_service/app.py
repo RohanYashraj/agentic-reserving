@@ -27,6 +27,8 @@ from engine_service.config import Settings, load_settings
 from engine_service.errors import register_exception_handlers
 from engine_service.models import (
     CanonicalizeResponse,
+    DraftReportRequest,
+    DraftReportResponse,
     ReDeriveRequest,
     RecommendRequest,
     RecommendResponse,
@@ -35,6 +37,7 @@ from engine_service.models import (
     ValidateRequest,
 )
 from engine_service.recommendations_flow import generate_recommendations
+from engine_service.report_flow import generate_reserve_report
 from reserving_engine import (
     compute_diagnostics,
     rederive,
@@ -112,6 +115,21 @@ def create_app(
             model, request.result_set, request.diagnostics_bundle
         )
         response = RecommendResponse.from_outcome(request.run_id, outcome)
+        return JSONResponse(content=response.model_dump(mode="json", by_alias=True))
+
+    @app.post("/reports", dependencies=[auth])
+    def reports(request: DraftReportRequest) -> JSONResponse:
+        # Story 5.4 (FR-11, AD-1/AD-5/AD-9): a thin adapter over the bounded
+        # draft-gate-validate loop — build the model (fails closed to
+        # model_unavailable if unconfigured), run the loop over the accepted
+        # recommendations, serialize. Both the accepted and rejected arms return
+        # HTTP 200 with the transcript(s) for audit; ModelNotConfiguredError
+        # propagates to the error envelope (503).
+        model = build_model()
+        outcome = generate_reserve_report(
+            model, request.result_set, request.diagnostics_bundle, request.recommendations
+        )
+        response = DraftReportResponse.from_outcome(request.run_id, outcome)
         return JSONResponse(content=response.model_dump(mode="json", by_alias=True))
 
     return app

@@ -208,6 +208,40 @@ export const recommendationsValidator = v.object({
   recommendations: v.array(methodRecommendationValidator),
 });
 
+// --- ReserveReport (the accepted /reports document, Story 5.4) ------------
+
+/**
+ * One section of the drafted Reserve Report, post-Provenance-Gate. `text` is
+ * the RENDERED section prose (figures already rendered from `{{rs:...}}`
+ * placeholders, citations from `{{dx:...}}`); `citations` is the resolved
+ * Diagnostic-ID list from the gate — the machine-readable pin the Epic-6
+ * CitationChip renders (FR-11). `citations` MAY be empty (a purely-qualitative
+ * caveat with no figure). Matches `ReserveReportSection` in
+ * `reserving_engine/reserve_report.py`.
+ */
+export const reserveReportSectionValidator = v.object({
+  text: v.string(),
+  citations: v.array(v.string()),
+});
+
+/**
+ * The accepted Reserve Report document persisted in the `reserveReports` table
+ * (FR-11, AD-10) — the /reports response's `accepted` arm. THE schema gate:
+ * `storeReserveReport`'s typed arg rejects a schema-invalid document at the
+ * boundary, so it is never stored. The four sections are NAMED fields (exactly
+ * the four, all present, structural-by-construction). Drift-checked in
+ * `tests/engine-contract.test.ts` against `schemas/reserve-report.schema.json`.
+ */
+export const reserveReportValidator = v.object({
+  schemaVersion: v.string(),
+  runId: v.string(),
+  machineDrafted: v.boolean(),
+  executiveSummary: reserveReportSectionValidator,
+  methodSelectionRationale: reserveReportSectionValidator,
+  movementCommentary: reserveReportSectionValidator,
+  limitations: reserveReportSectionValidator,
+});
+
 // --- Triangle (the /validate + /runs request body) -----------------------
 
 /**
@@ -280,6 +314,8 @@ export type Method = Infer<typeof methodValidator>;
 export type Recommendations = Infer<typeof recommendationsValidator>;
 export type MethodRecommendation = Infer<typeof methodRecommendationValidator>;
 export type RecommendationReason = Infer<typeof recommendationReasonValidator>;
+export type ReserveReport = Infer<typeof reserveReportValidator>;
+export type ReserveReportSection = Infer<typeof reserveReportSectionValidator>;
 export type AprioriLossRatio = Infer<typeof aprioriLossRatioValidator>;
 export type RunParameters = Infer<typeof runParametersValidator>;
 export type Triangle = Infer<typeof triangleValidator>;

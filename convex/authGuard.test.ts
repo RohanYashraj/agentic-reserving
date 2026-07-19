@@ -80,6 +80,7 @@ const publicFunctionArgs: Record<string, Record<string, unknown>> = {
   "runs:getResultSet": { workspaceId: "org_test" },
   "runs:getDiagnosticsBundle": { workspaceId: "org_test" },
   "runs:getRecommendations": { workspaceId: "org_test" },
+  "runs:getReserveReport": { workspaceId: "org_test" },
   "runs:retryRun": { workspaceId: "org_test" },
   // rederiveRun (Story 4.7) is a public ACTION; requireMember is its first
   // statement, so an unauthenticated call is rejected before the engine fetch.
@@ -87,6 +88,9 @@ const publicFunctionArgs: Record<string, Record<string, unknown>> = {
   // generateRecommendations (Story 5.3) is a public ACTION; requireMember is its
   // first statement, so an unauthenticated call is rejected before the engine call.
   "runs:generateRecommendations": { workspaceId: "org_test" },
+  // generateReserveReport (Story 5.4) is a public ACTION; requireMember is its
+  // first statement, so an unauthenticated call is rejected before the engine call.
+  "runs:generateReserveReport": { workspaceId: "org_test" },
 };
 
 type Harness = TestConvex<SchemaDefinition<GenericSchema, boolean>>;
@@ -245,9 +249,11 @@ describe("auth-guard enumeration (NFR-3)", () => {
         path === "runs:getResultSet" ||
         path === "runs:getDiagnosticsBundle" ||
         path === "runs:getRecommendations" ||
+        path === "runs:getReserveReport" ||
         path === "runs:retryRun" ||
         path === "runs:rederiveRun" ||
-        path === "runs:generateRecommendations"
+        path === "runs:generateRecommendations" ||
+        path === "runs:generateReserveReport"
       ) {
         return { ...publicFunctionArgs[path], runId };
       }

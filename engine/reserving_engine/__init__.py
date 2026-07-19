@@ -35,6 +35,12 @@ from reserving_engine.rederivation import (
     ReDerivationReport,
     rederive,
 )
+from reserving_engine.reserve_report import (
+    ReserveReport,
+    ReserveReportRejection,
+    ReserveReportSection,
+    validate_reserve_report,
+)
 from reserving_engine.resultset import (
     AprioriLossRatio,
     DevelopmentFactor,
@@ -78,6 +84,9 @@ __all__ = [
     "RecommendationRejection",
     "Recommendations",
     "ResidualElement",
+    "ReserveReport",
+    "ReserveReportRejection",
+    "ReserveReportSection",
     "ResultSet",
     "RunParameters",
     "Triangle",
@@ -91,6 +100,7 @@ __all__ = [
     "resolve_diagnostic",
     "run_methods",
     "validate_recommendations",
+    "validate_reserve_report",
     "triangle_hash",
     "validate_triangle",
 ]

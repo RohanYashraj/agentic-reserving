@@ -16,9 +16,14 @@ from engine_service.recommendations_flow import (
     RecommendationsAccepted,
     RecommendationsOutcome,
 )
+from engine_service.report_flow import (
+    ReserveReportAccepted,
+    ReserveReportOutcome,
+)
 from reserving_engine import (
     DiagnosticsBundle,
     Recommendations,
+    ReserveReport,
     ResultSet,
     RunParameters,
     Triangle,
@@ -139,6 +144,67 @@ class RecommendResponse(BaseModel):
         return cls(
             status="rejected",
             recommendations=None,
+            attempts=outcome.attempts,
+            rejection_summary=outcome.reason_summary,
+        )
+
+
+class DraftReportRequest(BaseModel):
+    """``POST /reports`` body (Story 5.4). engine_service is stateless (AD-3),
+    so the Run's stored ResultSet + DiagnosticsBundle AND the accepted
+    ``Recommendations`` are passed DOWN from Convex — never fetched by the
+    engine. ``run_id`` is the AD-7 correlation key. The report is drafted
+    "Given accepted recommendations" (AC-1), so the document is a required
+    input fed to ``build_report_prompt``."""
+
+    model_config = _MODEL_CONFIG
+
+    run_id: str
+    result_set: ResultSet
+    diagnostics_bundle: DiagnosticsBundle
+    recommendations: Recommendations
+
+    @field_validator("run_id")
+    @classmethod
+    def _non_empty_run_id(cls, value: str) -> str:
+        if not value:
+            raise ValueError("run_id must not be empty")
+        return value
+
+
+class DraftReportResponse(BaseModel):
+    """``POST /reports`` response (Story 5.4). A discriminated result carrying
+    the per-attempt transcript(s) in EVERY arm so the Convex caller audit-logs
+    the full LLM interaction on success AND on failure (FR-15, AD-6). Both
+    ``accepted`` and ``rejected`` return HTTP 200 — a gate / structural
+    exhaustion is a normal, auditable outcome, not a server error
+    (``model_unavailable`` and bad input use the error envelope instead).
+
+    ``report`` is the accepted document (``null`` on rejection);
+    ``rejection_summary`` explains a rejection (``null`` on acceptance).
+    Mirrors ``RecommendResponse``."""
+
+    model_config = _MODEL_CONFIG
+
+    status: Literal["accepted", "rejected"]
+    report: ReserveReport | None = None
+    attempts: tuple[AttemptRecord, ...]
+    rejection_summary: str | None = None
+
+    @classmethod
+    def from_outcome(
+        cls, run_id: str, outcome: ReserveReportOutcome
+    ) -> "DraftReportResponse":
+        if isinstance(outcome, ReserveReportAccepted):
+            return cls(
+                status="accepted",
+                report=outcome.report,
+                attempts=outcome.attempts,
+                rejection_summary=None,
+            )
+        return cls(
+            status="rejected",
+            report=None,
             attempts=outcome.attempts,
             rejection_summary=outcome.reason_summary,
         )

@@ -72,7 +72,7 @@ def _run_body(run_id: str, triangle: Triangle, parameters: RunParameters | None 
 
 class TestAuth:
     @pytest.mark.parametrize(
-        "path", ["/validate", "/runs", "/canonicalize", "/rederive", "/recommendations"]
+        "path", ["/validate", "/runs", "/canonicalize", "/rederive", "/recommendations", "/reports"]
     )
     def test_missing_authorization_header_is_401(self, client: TestClient, path: str) -> None:
         resp = client.post(path, json={})
@@ -82,7 +82,7 @@ class TestAuth:
         assert set(body) == {"code", "message", "details"}
 
     @pytest.mark.parametrize(
-        "path", ["/validate", "/runs", "/canonicalize", "/rederive", "/recommendations"]
+        "path", ["/validate", "/runs", "/canonicalize", "/rederive", "/recommendations", "/reports"]
     )
     def test_wrong_secret_is_401(self, client: TestClient, path: str) -> None:
         resp = client.post(path, json={}, headers={"Authorization": "Bearer wrong-secret"})
@@ -90,14 +90,14 @@ class TestAuth:
         assert resp.json()["code"] == "unauthorized"
 
     @pytest.mark.parametrize(
-        "path", ["/validate", "/runs", "/canonicalize", "/rederive", "/recommendations"]
+        "path", ["/validate", "/runs", "/canonicalize", "/rederive", "/recommendations", "/reports"]
     )
     def test_non_bearer_scheme_is_401(self, client: TestClient, path: str) -> None:
         resp = client.post(path, json={}, headers={"Authorization": f"Basic {TEST_SECRET}"})
         assert resp.status_code == 401
 
     @pytest.mark.parametrize(
-        "path", ["/validate", "/runs", "/canonicalize", "/rederive", "/recommendations"]
+        "path", ["/validate", "/runs", "/canonicalize", "/rederive", "/recommendations", "/reports"]
     )
     def test_non_ascii_token_is_401_not_500(self, client: TestClient, path: str) -> None:
         # A non-ASCII bearer token must fail closed as 401 — never crash the
@@ -578,6 +578,136 @@ class TestRecommendations:
         client = _rec_client(lambda: _ScriptedModel([good]))
         resp = client.post(
             "/recommendations", json=_rec_body("", result_set, bundle), headers=AUTH
+        )
+        assert resp.status_code == 422
+        assert resp.json()["code"] == "bad_request"
+
+
+# --------------------------------------------------------------------------- #
+# Story 5.4: POST /reports — the Reserve Report drafting endpoint (AC-1..4)     #
+# --------------------------------------------------------------------------- #
+
+from reserving_engine import (  # noqa: E402
+    MethodRecommendation,
+    RecommendationReason,
+    Recommendations,
+)
+
+REPORT_RUN_ID = "run-5-4-endpoint"
+
+
+def _report_recommendations(result_set, bundle):
+    citation = bundle.ave[0].id
+    origins = [o.origin for o in result_set.method_results[0].origin_results]
+    return Recommendations(
+        run_id=REPORT_RUN_ID,
+        recommendations=tuple(
+            MethodRecommendation(
+                origin=origin,
+                method="chain_ladder",
+                reasons=(RecommendationReason(text=f"Chosen for {origin}.", citations=(citation,)),),
+            )
+            for origin in origins
+        ),
+    )
+
+
+def _report_run():
+    result_set = run_methods(TAYLOR_ASHE, CL_BF_MACK)
+    bundle = compute_diagnostics(TAYLOR_ASHE, result_set, REPORT_RUN_ID)
+    return result_set, bundle
+
+
+def _report_body(run_id: str, result_set, bundle) -> dict:
+    return {
+        "runId": run_id,
+        "resultSet": result_set.model_dump(mode="json", by_alias=True),
+        "diagnosticsBundle": bundle.model_dump(mode="json", by_alias=True),
+        "recommendations": _report_recommendations(result_set, bundle).model_dump(
+            mode="json", by_alias=True
+        ),
+    }
+
+
+def _report_draft_json(result_set, bundle, *, blank_section=None):
+    dx_id = bundle.ldf_stability[0].id
+    dx_ph = "{{" + dx_id + "}}"
+
+    def _section(name: str, default: str) -> str:
+        return "   " if blank_section == name else default
+
+    return json.dumps(
+        {
+            "executiveSummary": _section("executiveSummary", f"Stable position {dx_ph}."),
+            "methodSelectionRationale": _section(
+                "methodSelectionRationale", f"Chain ladder chosen {dx_ph}."
+            ),
+            "movementCommentary": _section(
+                "movementCommentary", f"No notable movements {dx_ph}."
+            ),
+            "limitations": _section("limitations", "Estimates carry uncertainty."),
+        }
+    )
+
+
+class TestReports:
+    def test_accepted_returns_document_and_transcript_200(self) -> None:
+        result_set, bundle = _report_run()
+        good = _report_draft_json(result_set, bundle)
+        client = _rec_client(lambda: _ScriptedModel([good]))
+        resp = client.post(
+            "/reports", json=_report_body(REPORT_RUN_ID, result_set, bundle), headers=AUTH
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "accepted"
+        assert body["report"] is not None
+        assert body["report"]["runId"] == REPORT_RUN_ID
+        assert body["report"]["machineDrafted"] is True
+        # The four named sections are present.
+        for field in (
+            "executiveSummary",
+            "methodSelectionRationale",
+            "movementCommentary",
+            "limitations",
+        ):
+            assert field in body["report"]
+        # The transcript rides in every arm (FR-15).
+        assert len(body["attempts"]) == 1
+        assert body["rejectionSummary"] is None
+
+    def test_gate_exhaustion_returns_rejected_200_no_report(self) -> None:
+        result_set, bundle = _report_run()
+        # Persistently blank section → the loop exhausts and rejects.
+        bad = _report_draft_json(result_set, bundle, blank_section="limitations")
+        client = _rec_client(lambda: _ScriptedModel([bad]))
+        resp = client.post(
+            "/reports", json=_report_body(REPORT_RUN_ID, result_set, bundle), headers=AUTH
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "rejected"
+        assert body["report"] is None
+        assert len(body["attempts"]) >= 1
+        assert body["rejectionSummary"]
+
+    def test_model_not_configured_is_model_unavailable_503(self) -> None:
+        result_set, bundle = _report_run()
+        client = _rec_client(None, gemini_key=None, gemini_model=None)
+        resp = client.post(
+            "/reports", json=_report_body(REPORT_RUN_ID, result_set, bundle), headers=AUTH
+        )
+        assert resp.status_code == 503
+        body = resp.json()
+        assert body["code"] == "model_unavailable"
+        assert set(body) == {"code", "message", "details"}
+
+    def test_empty_run_id_is_422_bad_request(self) -> None:
+        result_set, bundle = _report_run()
+        good = _report_draft_json(result_set, bundle)
+        client = _rec_client(lambda: _ScriptedModel([good]))
+        resp = client.post(
+            "/reports", json=_report_body("", result_set, bundle), headers=AUTH
         )
         assert resp.status_code == 422
         assert resp.json()["code"] == "bad_request"

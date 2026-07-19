@@ -187,3 +187,15 @@
 - `ON_PINNED_PLATFORM` reads env at import inside the pure core (AD-2 tension).
 - Whitespace-only `run_id` accepted (engine_service/models.py).
 - No multi-discrepancy / added-method ordering test coverage.
+
+### Story 5.4
+- The Report editor / four-section render / atomic CitationChips / manual-template shell — Epic 6.1.
+- The report status lifecycle transitions (draft → awaiting review → published), draft-lock, and assignment/review queue — Epic 6.2.
+- The Senior-Actuary override of a machine draft — Epic 6.3.
+- Approve-and-publish immutability + content versioning + "start new version" superseding records (FR-13) — Epic 6.4.
+- Word export of a published report — Epic 6.5.
+- The per-Run token/cost ceiling + the interpretation ≤10-min hard timeout + Engine-Only Mode derivation — Story 5.6 (where `max_attempts`, today a shared module constant reused from `recommendations_flow`, becomes config).
+- The Interpretation-status/subscription surface (redrafting-attempt-N-of-M, retry UI) — Story 5.5.
+- `report_flow` shares `AttemptRecord`/`AttemptRejection`/`MAX_ATTEMPTS` with `recommendations_flow` but re-implements the loop + feedback; if a third gated-drafting flow appears, factor the common scaffolding out (the `_report_feedback` vs `_redraft_feedback` origin-vs-section divergence is the seam).
+- The dedicated `reserveReports` table is a deliberate reversal of 5.3's inline-on-runs choice (the Reserve Report is a human-owned artifact, PRD §4.5); revisit only if Epic 6 ever needs it folded back — it won't.
+- `getRun` gains one indexed `by_run` read for `hasReserveReport` (a denormalised boolean on `runs` was rejected to avoid duplicating state).

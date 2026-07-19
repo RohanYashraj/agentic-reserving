@@ -47,6 +47,7 @@ last_updated: 2026-07-19
 # 2026-07-19: epic-5 → in-progress; 5-1 → ready-for-dev (create-story) → in-progress → review (dev-story)
 # 2026-07-19: 5-2 → ready-for-dev (create-story) → in-progress → review (dev-story)
 # 2026-07-19: 5-3 → ready-for-dev (create-story) → in-progress → review (dev-story)
+# 2026-07-19: 5-4 → ready-for-dev (create-story) → in-progress → review (dev-story)
 project: agentic-reserving
 project_key: NOKEY
 tracking_system: file-system
@@ -90,7 +91,7 @@ development_status:
   5-1-copilot-agent-with-read-only-tools: review
   5-2-provenance-gate-placeholder-rendering-and-numeric-checker: review
   5-3-method-recommendations-through-the-gate: review
-  5-4-reserve-report-drafting-through-the-gate: backlog
+  5-4-reserve-report-drafting-through-the-gate: review
   5-5-interpretation-tab-with-recommendation-table-and-citation-chips: backlog
   5-6-engine-only-mode-fail-closed-degradation: backlog
   epic-5-retrospective: optional

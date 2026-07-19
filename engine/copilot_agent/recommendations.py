@@ -29,22 +29,22 @@ from typing import Any
 
 from pydantic import BaseModel, ValidationError
 
+from copilot_agent._draft_json import DraftParseError, _extract_json_object
 from reserving_engine import DiagnosticsBundle, ResultSet
 from reserving_engine.resultset import _MODEL_CONFIG
+
+__all__ = [
+    "DraftParseError",
+    "MethodRecommendationDraft",
+    "RecommendationDraft",
+    "build_recommendation_prompt",
+    "parse_recommendation_draft",
+]
 
 # The five rs fields the Provenance Gate can render, in the exact camelCase the
 # gate's ``_RS_FIELD_ATTRS`` keys on. Kept as a literal list (not imported from
 # engine_service, which is upward) — the prompt teaches these names.
 _RS_FIELDS = ("ultimate", "ibnr", "mackStdErr", "reserveLow", "reserveHigh")
-
-
-class DraftParseError(ValueError):
-    """The model's final text could not be parsed into a ``RecommendationDraft``.
-
-    A typed, re-promptable condition (the bounded loop records it as a
-    ``draft_unparseable`` rejection and tries again) — never an uncaught
-    exception escaping the loop.
-    """
 
 
 class MethodRecommendationDraft(BaseModel):
@@ -125,28 +125,6 @@ def build_recommendation_prompt(
             "}",
         ]
     )
-
-
-def _extract_json_object(text: str) -> str:
-    """Return the JSON-object substring of ``text``: strip code fences and any
-    leading/trailing prose. The first ``{`` to the matching last ``}``."""
-    stripped = text.strip()
-    if not stripped:
-        raise DraftParseError("model produced empty output")
-    # Strip a fenced block (```json ... ``` or ``` ... ```) if present.
-    if stripped.startswith("```"):
-        inner = stripped[3:]
-        if inner[:4].lower() == "json":
-            inner = inner[4:]
-        fence_end = inner.rfind("```")
-        if fence_end != -1:
-            inner = inner[:fence_end]
-        stripped = inner.strip()
-    start = stripped.find("{")
-    end = stripped.rfind("}")
-    if start == -1 or end == -1 or end < start:
-        raise DraftParseError("no JSON object found in model output")
-    return stripped[start : end + 1]
 
 
 def parse_recommendation_draft(output_text: str) -> RecommendationDraft:

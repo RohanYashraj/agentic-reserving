@@ -30,6 +30,11 @@ from copilot_agent.recommendations import (
     build_recommendation_prompt,
     parse_recommendation_draft,
 )
+from copilot_agent.reserve_report import (
+    ReserveReportDraft,
+    build_report_prompt,
+    parse_report_draft,
+)
 from copilot_agent.tools import build_read_tools
 from copilot_agent.transcript import (
     ToolCallRecord,
@@ -44,6 +49,7 @@ __all__ = [
     "MethodRecommendationDraft",
     "ModelNotConfiguredError",
     "RecommendationDraft",
+    "ReserveReportDraft",
     "ToolCallRecord",
     "Transcript",
     "TranscriptMessage",
@@ -51,7 +57,9 @@ __all__ = [
     "build_interpretation_agent",
     "build_read_tools",
     "build_recommendation_prompt",
+    "build_report_prompt",
     "build_transcript",
     "parse_recommendation_draft",
+    "parse_report_draft",
     "run_interpretation",
 ]

@@ -1821,3 +1821,385 @@ describe("generateRecommendations action — persist / audit / fail-closed (AC-2
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
+
+// --- Story 5.4: Reserve Report drafting (persistence + audit + action) -------
+
+/** A schema-valid ReserveReport document whose runId matches the given run. */
+function makeReserveReport(runId: string) {
+  const cite = `dx:${runId}:ave:2019`;
+  const section = (text: string, citations: string[] = [cite]) => ({ text, citations });
+  return {
+    schemaVersion: "1.0.0",
+    runId,
+    machineDrafted: true,
+    executiveSummary: section("The overall position is stable."),
+    methodSelectionRationale: section("Chain ladder was chosen."),
+    movementCommentary: section("No notable movements."),
+    // A purely-qualitative caveat with no citation — legitimate (§Section minima).
+    limitations: section("Estimates carry uncertainty.", []),
+  };
+}
+
+/**
+ * Seed a `complete` run carrying a ResultSet + DiagnosticsBundle + accepted
+ * Recommendations (report-drafting-ready — AC-1 precondition).
+ */
+async function seedReportReadyRun(
+  t: Harness,
+  { workspaceId = "org_A" } = {},
+): Promise<Id<"runs">> {
+  const triangleId = await seedValidatedTriangle(t, workspaceId);
+  const runId = await t.run((ctx) =>
+    ctx.db.insert("runs", {
+      workspaceId,
+      triangleId,
+      triangleHash: TRIANGLE_HASH,
+      status: "complete",
+      parameters: { methods: ["chain_ladder"], aprioriLossRatios: [] },
+      createdBy: "user_seed",
+      createdAt: "2026-07-18T00:00:00.000Z",
+      resultSet: makeResultSet(TRIANGLE_HASH),
+      diagnosticsBundle: makeDiagnosticsBundle("seed", TRIANGLE_HASH),
+      completedAt: "2026-07-18T02:00:00.000Z",
+    }),
+  );
+  await t.run((ctx) =>
+    ctx.db.patch(runId, { recommendations: makeRecommendations(runId as string) }),
+  );
+  return runId;
+}
+
+async function reserveReportRows(t: Harness) {
+  return await t.run((ctx) => ctx.db.query("reserveReports").collect());
+}
+
+describe("storeReserveReport — persistence + audit + upsert (AC-2, AC-3)", () => {
+  test("inserts a draft row + appends report.drafted with the transcript", async () => {
+    const t = initConvexTest();
+    const runId = await seedInterpretableRun(t);
+    const report = makeReserveReport(runId);
+
+    await t.mutation(internal.runs.storeReserveReport, {
+      runId,
+      workspaceId: "org_A",
+      actor: "user_a",
+      report,
+      transcript: SAMPLE_ATTEMPTS,
+    });
+
+    const rows = await reserveReportRows(t);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].status).toBe("draft");
+    expect(rows[0].machineDrafted).toBe(true);
+    expect(rows[0].runId).toBe(runId);
+    expect(rows[0].report).toEqual(report);
+    expect(rows[0].createdBy).toBe("user_a");
+
+    const audits = (await auditRows(t)).filter((a) => a.eventType === "report.drafted");
+    expect(audits).toHaveLength(1);
+    expect(audits[0].runId).toBe(runId);
+    expect(audits[0].payload).toMatchObject({ runId });
+    expect(audits[0].payload.transcript).toEqual(SAMPLE_ATTEMPTS);
+  });
+
+  test("a second call upserts (patches the same row, no duplicate)", async () => {
+    const t = initConvexTest();
+    const runId = await seedInterpretableRun(t);
+
+    await t.mutation(internal.runs.storeReserveReport, {
+      runId,
+      workspaceId: "org_A",
+      actor: "user_a",
+      report: makeReserveReport(runId),
+      transcript: SAMPLE_ATTEMPTS,
+    });
+    // Re-draft: a different section text overwrites in place.
+    const redrafted = makeReserveReport(runId);
+    redrafted.executiveSummary = {
+      text: "A revised position.",
+      citations: [`dx:${runId}:ave:2019`],
+    };
+    await t.mutation(internal.runs.storeReserveReport, {
+      runId,
+      workspaceId: "org_A",
+      actor: "user_b",
+      report: redrafted,
+      transcript: SAMPLE_ATTEMPTS,
+    });
+
+    const rows = await reserveReportRows(t);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].report.executiveSummary.text).toBe("A revised position.");
+    expect(rows[0].createdBy).toBe("user_b");
+    // Two drafting events audited (both attempts are on the chain).
+    expect((await auditRows(t)).filter((a) => a.eventType === "report.drafted")).toHaveLength(2);
+  });
+
+  test("no-op on a non-complete run (guarded)", async () => {
+    const t = initConvexTest();
+    const triangleId = await seedValidatedTriangle(t);
+    const runId = await seedRun(t, triangleId, "running");
+
+    await t.mutation(internal.runs.storeReserveReport, {
+      runId,
+      workspaceId: "org_A",
+      actor: "user_a",
+      report: makeReserveReport(runId),
+      transcript: SAMPLE_ATTEMPTS,
+    });
+
+    expect(await reserveReportRows(t)).toHaveLength(0);
+    expect((await auditRows(t)).filter((a) => a.eventType === "report.drafted")).toHaveLength(0);
+  });
+
+  test("no-op on a cross-tenant workspace mismatch", async () => {
+    const t = initConvexTest();
+    const runId = await seedInterpretableRun(t, { workspaceId: "org_A" });
+    await t.mutation(internal.runs.storeReserveReport, {
+      runId,
+      workspaceId: "org_B",
+      actor: "user_b",
+      report: makeReserveReport(runId),
+      transcript: SAMPLE_ATTEMPTS,
+    });
+    expect(await reserveReportRows(t)).toHaveLength(0);
+  });
+
+  test("a runId mismatch throws REPORT_RUN_MISMATCH (never stored)", async () => {
+    const t = initConvexTest();
+    const runId = await seedInterpretableRun(t);
+    let code: string | undefined;
+    try {
+      await t.mutation(internal.runs.storeReserveReport, {
+        runId,
+        workspaceId: "org_A",
+        actor: "user_a",
+        report: makeReserveReport("some-other-run"),
+        transcript: SAMPLE_ATTEMPTS,
+      });
+    } catch (error) {
+      code = (error as ConvexError<{ code: string }>).data.code;
+    }
+    expect(code).toBe("REPORT_RUN_MISMATCH");
+    expect(await reserveReportRows(t)).toHaveLength(0);
+  });
+
+  test("a schema-invalid document throws at the arg boundary (AD-10 gate)", async () => {
+    const t = initConvexTest();
+    const runId = await seedInterpretableRun(t);
+    // Missing a section (limitations) → arg validation rejects it.
+    const invalid = {
+      schemaVersion: "1.0.0",
+      runId,
+      machineDrafted: true,
+      executiveSummary: { text: "x", citations: [] },
+      methodSelectionRationale: { text: "y", citations: [] },
+      movementCommentary: { text: "z", citations: [] },
+    };
+    await expect(
+      t.mutation(internal.runs.storeReserveReport, {
+        runId,
+        workspaceId: "org_A",
+        actor: "user_a",
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        report: invalid as any,
+        transcript: SAMPLE_ATTEMPTS,
+      }),
+    ).rejects.toThrow();
+    expect(await reserveReportRows(t)).toHaveLength(0);
+  });
+});
+
+describe("recordReportDraftRejection — failed drafting audit (AC-2)", () => {
+  test("appends report.draftRejected and persists NO report", async () => {
+    const t = initConvexTest();
+    const runId = await seedInterpretableRun(t);
+
+    await t.mutation(internal.runs.recordReportDraftRejection, {
+      runId,
+      workspaceId: "org_A",
+      actor: "user_a",
+      transcript: SAMPLE_ATTEMPTS,
+      rejections: "reserve report drafting failed after 3 attempts",
+    });
+
+    const audits = (await auditRows(t)).filter(
+      (a) => a.eventType === "report.draftRejected",
+    );
+    expect(audits).toHaveLength(1);
+    expect(audits[0].payload).toMatchObject({ runId });
+    expect(await reserveReportRows(t)).toHaveLength(0);
+  });
+});
+
+describe("getReserveReport + getRun.hasReserveReport (AC-3)", () => {
+  test("returns the stored row for a member; getRun exposes hasReserveReport", async () => {
+    const t = initConvexTest();
+    const runId = await seedInterpretableRun(t);
+    const report = makeReserveReport(runId);
+    await t.mutation(internal.runs.storeReserveReport, {
+      runId,
+      workspaceId: "org_A",
+      actor: "user_a",
+      report,
+      transcript: SAMPLE_ATTEMPTS,
+    });
+
+    const got = await t
+      .withIdentity(analystA)
+      .query(api.runs.getReserveReport, { workspaceId: "org_A", runId });
+    expect(got?.report).toEqual(report);
+    expect(got?.status).toBe("draft");
+
+    const lean = await t
+      .withIdentity(analystA)
+      .query(api.runs.getRun, { workspaceId: "org_A", runId });
+    expect(lean?.hasReserveReport).toBe(true);
+  });
+
+  test("cross-tenant read returns null (existence not leaked)", async () => {
+    const t = initConvexTest();
+    const runId = await seedInterpretableRun(t, { workspaceId: "org_A" });
+    const got = await t
+      .withIdentity(analystB)
+      .query(api.runs.getReserveReport, { workspaceId: "org_B", runId });
+    expect(got).toBeNull();
+  });
+
+  test("null + hasReserveReport false before any drafting", async () => {
+    const t = initConvexTest();
+    const runId = await seedInterpretableRun(t);
+    const got = await t
+      .withIdentity(analystA)
+      .query(api.runs.getReserveReport, { workspaceId: "org_A", runId });
+    expect(got).toBeNull();
+    const lean = await t
+      .withIdentity(analystA)
+      .query(api.runs.getRun, { workspaceId: "org_A", runId });
+    expect(lean?.hasReserveReport).toBe(false);
+  });
+});
+
+describe("generateReserveReport action — persist / audit / fail-closed (AC-2, AC-3, AC-4, AD-9)", () => {
+  beforeEach(() => {
+    vi.stubEnv("ENGINE_SERVICE_URL", "http://engine.test");
+    vi.stubEnv("ENGINE_SERVICE_SECRET", "test-secret");
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  test("accepted → persists the document + audits the transcript", async () => {
+    const t = initConvexTest();
+    const runId = await seedReportReadyRun(t);
+    const engineResponse = {
+      status: "accepted",
+      report: makeReserveReport(runId),
+      attempts: SAMPLE_ATTEMPTS,
+      rejectionSummary: null,
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(engineResponse));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const out = await t
+      .withIdentity(analystA)
+      .action(api.runs.generateReserveReport, { workspaceId: "org_A", runId });
+
+    expect(out).toEqual({ status: "accepted" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("http://engine.test/reports");
+    const body = JSON.parse((init as RequestInit).body as string);
+    expect(body.runId).toBe(runId);
+    expect(body.resultSet).toBeDefined();
+    expect(body.diagnosticsBundle).toBeDefined();
+    expect(body.recommendations).toBeDefined();
+
+    const rows = await reserveReportRows(t);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].report).toEqual(makeReserveReport(runId));
+    const audits = (await auditRows(t)).filter((a) => a.eventType === "report.drafted");
+    expect(audits).toHaveLength(1);
+  });
+
+  test("rejected → audits report.draftRejected, persists no report", async () => {
+    const t = initConvexTest();
+    const runId = await seedReportReadyRun(t);
+    const engineResponse = {
+      status: "rejected",
+      report: null,
+      attempts: SAMPLE_ATTEMPTS,
+      rejectionSummary: "reserve report drafting failed after 3 attempts",
+    };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(engineResponse)));
+
+    const out = await t
+      .withIdentity(analystA)
+      .action(api.runs.generateReserveReport, { workspaceId: "org_A", runId });
+
+    expect(out).toEqual({ status: "rejected" });
+    expect(await reserveReportRows(t)).toHaveLength(0);
+    const audits = (await auditRows(t)).filter(
+      (a) => a.eventType === "report.draftRejected",
+    );
+    expect(audits).toHaveLength(1);
+  });
+
+  test("engine model_unavailable propagates as engine.model_unavailable (AD-9)", async () => {
+    const t = initConvexTest();
+    const runId = await seedReportReadyRun(t);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse({ code: "model_unavailable", message: "not configured" }, 503),
+      ),
+    );
+
+    let code: string | undefined;
+    try {
+      await t
+        .withIdentity(analystA)
+        .action(api.runs.generateReserveReport, { workspaceId: "org_A", runId });
+    } catch (error) {
+      code = (error as ConvexError<{ code: string }>).data.code;
+    }
+    expect(code).toBe("engine.model_unavailable");
+    expect(await reserveReportRows(t)).toHaveLength(0);
+  });
+
+  test("a run without accepted recommendations is RUN_NOT_INTERPRETABLE (no engine call)", async () => {
+    const t = initConvexTest();
+    // A complete run WITH results + diagnostics but NO recommendations.
+    const runId = await seedInterpretableRun(t);
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    let code: string | undefined;
+    try {
+      await t
+        .withIdentity(analystA)
+        .action(api.runs.generateReserveReport, { workspaceId: "org_A", runId });
+    } catch (error) {
+      code = (error as ConvexError<{ code: string }>).data.code;
+    }
+    expect(code).toBe("RUN_NOT_INTERPRETABLE");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  test("unauthenticated is rejected before the engine call (AD-4)", async () => {
+    const t = initConvexTest();
+    const runId = await seedReportReadyRun(t);
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    let code: string | undefined;
+    try {
+      await t.action(api.runs.generateReserveReport, { workspaceId: "org_A", runId });
+    } catch (error) {
+      code = (error as ConvexError<{ code: string }>).data.code;
+    }
+    expect(code).toBe("UNAUTHENTICATED");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});

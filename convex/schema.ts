@@ -3,6 +3,7 @@ import { v } from "convex/values";
 import {
   diagnosticsBundleValidator,
   recommendationsValidator,
+  reserveReportValidator,
   resultSetValidator,
   runParametersValidator,
   triangleValidator,
@@ -147,5 +148,32 @@ export default defineSchema({
     failedAt: v.optional(v.string()),
   })
     // Run listing per Workspace (Run detail 4.3 / dashboard Epic 7).
+    .index("by_workspace", ["workspaceId"]),
+
+  // Reserve Reports (FR-11). Story 5.4 drafts a machine-authored report through
+  // the Provenance Gate and persists the accepted document here. This is a
+  // DELIBERATE reversal of 5.3's inline-on-runs choice: the Reserve Report is a
+  // human-owned artifact from the moment it exists (PRD §4.5) with an
+  // independent lifecycle (draft → awaiting review → published, Epic 6.2/6.4),
+  // immutable published versions + "start new version" superseding records
+  // (Epic 6.4, FR-13), and human-edit content versioning (Epic 6.1) — none of
+  // which fit an inline optional on `runs`. Ship it LEAN: `status` is a single
+  // `draft` literal (Epic 6 extends the union so a schema-invalid status can't
+  // be written); no versioning columns yet (Epic 6 owns them); one row per run
+  // that a re-draft overwrites. `report` is typed by `reserveReportValidator`,
+  // so a schema-invalid document THROWS at the mutation boundary and is never
+  // stored (AD-10).
+  reserveReports: defineTable({
+    workspaceId: v.string(), // Clerk org ID — the Workspace (AD-4 scoping)
+    runId: v.id("runs"), // the Run this report interprets
+    status: v.union(v.literal("draft")), // 5.4 writes only "draft"; Epic 6 adds awaiting_review/published
+    machineDrafted: v.boolean(), // AC-3 provenance marker (true for the agent path)
+    report: reserveReportValidator, // the four gated sections (typed by the engine contract, AD-10)
+    createdBy: v.string(), // Clerk user id (identity.subject) who triggered drafting
+    createdAt: v.string(), // ISO-8601 UTC
+  })
+    // One report per run in 5.4 (re-draft overwrites); Epic 6 versions.
+    .index("by_run", ["runId"])
+    // Review-queue / dashboard listing (Epic 6/7).
     .index("by_workspace", ["workspaceId"]),
 });

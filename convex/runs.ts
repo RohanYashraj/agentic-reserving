@@ -19,12 +19,14 @@ import type {
   DiagnosticsBundle,
   ReDerivationReport,
   Recommendations,
+  ReserveReport,
   ResultSet,
 } from "./lib/engineContract";
 import {
   diagnosticsBundleValidator,
   reDerivationReportValidator,
   recommendationsValidator,
+  reserveReportValidator,
   resultSetValidator,
   runParametersValidator,
 } from "./lib/engineContract";
@@ -475,6 +477,14 @@ export const getRun = query({
     await requireMember(ctx, workspaceId);
     const run = await ctx.db.get(runId);
     if (run === null || run.workspaceId !== workspaceId) return null;
+    // Story 5.4: one indexed `by_run` read → a boolean gating the Epic-6 Report
+    // tab, exactly like hasResults/hasDiagnostics/hasRecommendations. The report
+    // lives in its own table (not inline), so this is a lookup, not a field
+    // check; it leaks NO figures and keeps getRun lean.
+    const reserveReport = await ctx.db
+      .query("reserveReports")
+      .withIndex("by_run", (q) => q.eq("runId", runId))
+      .unique();
     return {
       _id: run._id,
       status: run.status, // queued | running | complete | failed
@@ -493,6 +503,8 @@ export const getRun = query({
       // Story 5.3: gates the 5.5 Interpretation tab exactly like hasResults/
       // hasDiagnostics gate Results/Diagnostics — a boolean, NO figures leak.
       hasRecommendations: run.recommendations !== undefined,
+      // Story 5.4: gates the Epic-6 Report tab — a boolean, NO figures leak.
+      hasReserveReport: reserveReport !== null,
     };
   },
 });
@@ -1020,6 +1032,282 @@ export const generateRecommendations = action({
 
     // Rejected: a clean, audited failed-Interpretation (AC-2) — NOT a 500.
     await ctx.runMutation(internal.runs.recordInterpretationRejection, {
+      runId,
+      workspaceId,
+      actor,
+      transcript: response.attempts,
+      rejections: response.rejectionSummary,
+    });
+    return { status: "rejected" as const };
+  },
+});
+
+// --- Story 5.4: Reserve Report drafting (persistence + audit + action) -------
+
+/** The engine `/reports` response wire shape (discriminated result, transcripts
+ * in every arm — FR-15). `attempts` rides as opaque JSON to the audit payload;
+ * only the `accepted` document is a drift-checked contract. */
+type DraftReportResponse = {
+  status: "accepted" | "rejected";
+  report: ReserveReport | null;
+  attempts: unknown;
+  rejectionSummary: string | null;
+};
+
+/**
+ * Ingredients for report drafting: the run's stored ResultSet + DiagnosticsBundle
+ * + the accepted Recommendations (all passed DOWN into the engine —
+ * engine_service is stateless, AD-3). Internal (the trusted
+ * `generateReserveReport` action is the only caller), BUT it re-checks tenancy
+ * anyway (same RUN_NOT_FOUND for wrong-workspace/absent, so existence never
+ * leaks) because the action passes an attacker-controllable runId. A report is
+ * drafted "Given accepted recommendations" (AC-1 precondition), so a `complete`
+ * run WITHOUT stored recommendations is RUN_NOT_INTERPRETABLE (its message names
+ * the missing recommendations). Mirrors `getRunForRecommend`.
+ */
+export const getRunForDraftReport = internalQuery({
+  args: { runId: v.id("runs"), workspaceId: v.string() },
+  handler: async (ctx, { runId, workspaceId }) => {
+    const run = await ctx.db.get(runId);
+    if (run === null || run.workspaceId !== workspaceId) {
+      throw new ConvexError({
+        code: "RUN_NOT_FOUND",
+        message: "That Run does not exist in this Workspace.",
+      });
+    }
+    if (
+      run.status !== "complete" ||
+      run.resultSet === undefined ||
+      run.diagnosticsBundle === undefined ||
+      run.recommendations === undefined
+    ) {
+      throw new ConvexError({
+        code: "RUN_NOT_INTERPRETABLE",
+        message:
+          "Drafting a Reserve Report needs a completed Run with stored results, " +
+          "diagnostics, and accepted recommendations.",
+      });
+    }
+    return {
+      resultSet: run.resultSet,
+      diagnosticsBundle: run.diagnosticsBundle,
+      recommendations: run.recommendations,
+    };
+  },
+});
+
+/**
+ * Persist the accepted Reserve Report in the `reserveReports` table + audit the
+ * transcript (Story 5.4, FR-11/FR-15). THE schema gate is the typed `report`
+ * arg (`reserveReportValidator`): a schema-invalid document THROWS at the
+ * boundary and is never stored (AD-10). Guarded on `status === "complete"` and
+ * matching workspace (no-op on a vanished / cross-tenant run). Chain of custody:
+ * the document's `runId` must match the run (like storeRecommendations's check
+ * → REPORT_RUN_MISMATCH).
+ *
+ * UPSERT into `reserveReports` via the `by_run` index: re-drafting overwrites
+ * the machine draft (no human edits exist in 5.4 to clobber; Epic 6 guards
+ * human-owned rows). The audit payload carries the transcript(s) — the full LLM
+ * interaction (FR-15, AD-6) — but NO reserve figures (AD-1/leanness; the report
+ * lives on the row). `createdAt` is minted here via the repo's standard
+ * `new Date(Date.now()).toISOString()` (matching `createRun`) — never a
+ * `datetime.now()` in the engine.
+ */
+export const storeReserveReport = internalMutation({
+  args: {
+    runId: v.id("runs"),
+    workspaceId: v.string(),
+    actor: v.string(),
+    report: reserveReportValidator,
+    transcript: v.any(),
+  },
+  handler: async (ctx, { runId, workspaceId, actor, report, transcript }) => {
+    const run = await ctx.db.get(runId);
+    if (run === null || run.workspaceId !== workspaceId || run.status !== "complete") {
+      return;
+    }
+    // Chain of custody (AD-7): the accepted document's correlation key must be
+    // this Run's id — a mismatch means a cross-Run document; never store it.
+    if (report.runId !== (runId as string)) {
+      throw new ConvexError({
+        code: "REPORT_RUN_MISMATCH",
+        message: "The Reserve Report document's runId does not match the Run.",
+      });
+    }
+
+    const createdAt = new Date(Date.now()).toISOString();
+    const existing = await ctx.db
+      .query("reserveReports")
+      .withIndex("by_run", (q) => q.eq("runId", runId))
+      .unique();
+    if (existing !== null) {
+      // Re-draft overwrites the machine draft (regenerable; Epic 6 guards
+      // human-owned rows / versions, which don't exist yet).
+      await ctx.db.patch(existing._id, {
+        report,
+        machineDrafted: true,
+        createdBy: actor,
+        createdAt,
+      });
+    } else {
+      await ctx.db.insert("reserveReports", {
+        workspaceId,
+        runId,
+        status: "draft",
+        machineDrafted: true,
+        report,
+        createdBy: actor,
+        createdAt,
+      });
+    }
+
+    await appendAuditEntryInTransaction(ctx, {
+      workspaceId,
+      actor,
+      eventType: "report.drafted",
+      runId,
+      payload: { runId, transcript },
+    });
+  },
+});
+
+/**
+ * Record a FAILED report drafting (gate/structural exhaustion) — append a
+ * `report.draftRejected` audit entry carrying the transcript + rejections
+ * (AD-5/FR-11 "the rejection with reasons is audit-logged"). Persists NO report
+ * (AC-2 never-partial). Guarded so a vanished / cross-tenant run no-ops. Single
+ * audit writer via `appendAuditEntryInTransaction`.
+ */
+export const recordReportDraftRejection = internalMutation({
+  args: {
+    runId: v.id("runs"),
+    workspaceId: v.string(),
+    actor: v.string(),
+    transcript: v.any(),
+    rejections: v.any(),
+  },
+  handler: async (ctx, { runId, workspaceId, actor, transcript, rejections }) => {
+    const run = await ctx.db.get(runId);
+    if (run === null || run.workspaceId !== workspaceId) return;
+    await appendAuditEntryInTransaction(ctx, {
+      workspaceId,
+      actor,
+      eventType: "report.draftRejected",
+      runId,
+      payload: { runId, transcript, rejections },
+    });
+  },
+});
+
+/**
+ * The stored Reserve Report for one Run, verbatim (Story 5.4, FR-11) — the
+ * report read surface the Epic-6 Report tab subscribes to ONLY when
+ * `hasReserveReport` (getRun's boolean gate). The structural twin of
+ * `getRecommendations`, but reading the dedicated `reserveReports` table.
+ *
+ * Public → requireMember first (AD-4); then a tenancy re-check (fetch the run,
+ * `null` if outside this Workspace — existence never leaks). Returns the
+ * `reserveReports` row verbatim (or `null`); Epic 6 renders it (CitationChip off
+ * `report.<section>.citations`). No projection.
+ *
+ * AD-1: this query only READS and RETURNS the machine-drafted document (whose
+ * figures are already gate-rendered from the ResultSet); it computes nothing.
+ */
+export const getReserveReport = query({
+  args: { workspaceId: v.string(), runId: v.id("runs") },
+  handler: async (ctx, { workspaceId, runId }) => {
+    await requireMember(ctx, workspaceId);
+    const run = await ctx.db.get(runId);
+    if (run === null || run.workspaceId !== workspaceId) return null;
+    return await ctx.db
+      .query("reserveReports")
+      .withIndex("by_run", (q) => q.eq("runId", runId))
+      .unique();
+  },
+});
+
+/**
+ * Draft a Reserve Report through the Provenance Gate (Story 5.4, FR-11, AD-5). A
+ * public ACTION (it must `fetch` the engine): `requireMember` is its FIRST
+ * statement (AD-4), BEFORE the engine call, so an unauthenticated / non-member
+ * caller is rejected without reaching the model plane. **`requireMember`, not
+ * `requireRole`** — machine-drafting a report is not a privileged product-state
+ * approval; approve/publish/override land in Epic 6 (`requireRole(senior_actuary)`).
+ * Mirrors `generateRecommendations`'s documented member-vs-role decision.
+ *
+ * The bounded redraft loop lives server-side in the engine (one HTTP call). This
+ * action is the thin persist+audit tail: fetch → callEngine → branch on the
+ * discriminated result. Re-running overwrites the machine draft in
+ * `reserveReports` (via storeReserveReport's upsert); it adds NO run-status value
+ * (interpretation status/lifecycle is 5.5/5.6/Epic 6).
+ */
+export const generateReserveReport = action({
+  args: { workspaceId: v.string(), runId: v.id("runs") },
+  returns: v.object({ status: v.union(v.literal("accepted"), v.literal("rejected")) }),
+  handler: async (
+    ctx,
+    { workspaceId, runId },
+  ): Promise<{ status: "accepted" | "rejected" }> => {
+    // AD-4: identity + Workspace membership before anything else (before fetch).
+    const { identity } = await requireMember(ctx, workspaceId);
+    const actor = identity.subject;
+
+    // Tenancy re-check happens inside getRunForDraftReport (runId is
+    // attacker-controllable); it throws RUN_NOT_FOUND for wrong-workspace/absent
+    // and RUN_NOT_INTERPRETABLE for a Run without results + diagnostics +
+    // recommendations (AC-1 precondition).
+    const { resultSet, diagnosticsBundle, recommendations } = await ctx.runQuery(
+      internal.runs.getRunForDraftReport,
+      { runId, workspaceId },
+    );
+
+    // callEngine maps the engine error envelope → engine.<code>; a missing model
+    // surfaces as `engine.model_unavailable` (the typed signal Story 5.6 keys
+    // Engine-Only Mode on) and propagates as-is, as do ENGINE_UNAVAILABLE /
+    // ENGINE_UNCONFIGURED (transient — the UI shows a retry, Epic 6).
+    const response = await callEngine<DraftReportResponse>("/reports", {
+      runId,
+      resultSet,
+      diagnosticsBundle,
+      recommendations,
+    });
+
+    // Defensive wire-shape guard (like generateRecommendations's
+    // ENGINE_INVALID_RESPONSE): callEngine casts the JSON unchecked, so validate
+    // before branching.
+    if (
+      response === null ||
+      typeof response !== "object" ||
+      (response.status !== "accepted" && response.status !== "rejected")
+    ) {
+      throw new ConvexError({
+        code: "ENGINE_INVALID_RESPONSE",
+        message: "The /reports response did not match the expected contract.",
+      });
+    }
+
+    if (response.status === "accepted") {
+      if (response.report === null) {
+        throw new ConvexError({
+          code: "ENGINE_INVALID_RESPONSE",
+          message: "An accepted drafting carried no Reserve Report document.",
+        });
+      }
+      // storeReserveReport re-validates the document at its typed arg boundary
+      // (AD-10) and audits the transcript.
+      await ctx.runMutation(internal.runs.storeReserveReport, {
+        runId,
+        workspaceId,
+        actor,
+        report: response.report,
+        transcript: response.attempts,
+      });
+      return { status: "accepted" as const };
+    }
+
+    // Rejected: a clean, audited failed drafting (AC-2/AC-4) — NOT a 500, never
+    // a silent queue.
+    await ctx.runMutation(internal.runs.recordReportDraftRejection, {
       runId,
       workspaceId,
       actor,
