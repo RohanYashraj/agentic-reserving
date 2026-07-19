@@ -4,8 +4,8 @@ import { useAuth } from "@clerk/nextjs";
 import { useQuery } from "convex/react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { useState } from "react";
 
+import { CopyableHash } from "@/components/CopyableHash";
 import { TriangleGrid } from "@/components/TriangleGrid";
 import {
   TriangleStatusIndicator,
@@ -18,34 +18,6 @@ import type { Id } from "@/convex/_generated/dataModel";
 // Latest-Diagonal edge-marking, the confirmed periods, and BOTH hashes labelled
 // distinctly (raw-file vs canonical-triangle-JSON) so the two are never
 // conflated. Data surface (max-w-screen-2xl), like the library.
-
-function HashRow({ label, hash }: { label: string; hash: string }) {
-  const [copied, setCopied] = useState(false);
-  async function copy() {
-    // clipboard is unavailable in insecure contexts and can reject on
-    // permission-deny — never let the promise reject unhandled.
-    try {
-      await navigator.clipboard.writeText(hash);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1500);
-    } catch {
-      /* no-op: copy unsupported/denied; the hash is still visible to select */
-    }
-  }
-  return (
-    <div className="flex flex-col gap-0.5">
-      <span className="text-xs text-muted-foreground">{label}</span>
-      <button
-        type="button"
-        onClick={() => void copy()}
-        title="Copy full hash"
-        className="numeric w-fit text-left text-sm text-foreground hover:text-primary"
-      >
-        {copied ? "Copied" : `${hash.slice(0, 16)}…`}
-      </button>
-    </div>
-  );
-}
 
 export default function TriangleDetailPage() {
   const { orgId } = useAuth();
@@ -84,6 +56,13 @@ export default function TriangleDetailPage() {
 
           {triangle.status === "validated" && triangle.acceptedTriangle ? (
             <div className="mt-6 space-y-6">
+              <Link
+                href={`/triangles/${triangleId}/run`}
+                className="inline-block w-fit rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+              >
+                Run methods
+              </Link>
+
               {triangle.periodMeta && (
                 <p className="text-sm text-muted-foreground">
                   Origin periods: {triangle.periodMeta.originGranularity} ·
@@ -107,9 +86,9 @@ export default function TriangleDetailPage() {
               />
 
               <div className="flex flex-wrap gap-8">
-                <HashRow label="Raw-file hash" hash={triangle.rawFileHash} />
+                <CopyableHash label="Raw-file hash" hash={triangle.rawFileHash} />
                 {triangle.triangleHash && (
-                  <HashRow
+                  <CopyableHash
                     label="Triangle hash (canonical)"
                     hash={triangle.triangleHash}
                   />
@@ -124,7 +103,7 @@ export default function TriangleDetailPage() {
                   : "This Triangle has not been accepted yet, so there is no confirmed content to display. Complete the upload wizard's Periods step to accept it."}
               </p>
               <div className="mt-4">
-                <HashRow label="Raw-file hash" hash={triangle.rawFileHash} />
+                <CopyableHash label="Raw-file hash" hash={triangle.rawFileHash} />
               </div>
             </div>
           )}

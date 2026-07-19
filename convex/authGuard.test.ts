@@ -19,15 +19,23 @@ import schema from "./schema";
 // adding a public function without registering minimally-valid args below
 // fails the build, on purpose.
 
+// convex.config.ts is the component-definition build artifact (app.use of the
+// workflow component, Story 4.2). It uses defineApp/`.use`, which only load
+// inside the Convex runtime — importing it under vitest throws. It defines no
+// public functions, so exclude it from enumeration (both globs).
 const realModules = import.meta.glob([
   "./**/*.ts",
   "!./**/*.test.ts",
+  "!./convex.config.ts",
   "./_generated/**/*.js",
 ]);
 const realModulesEager: Record<string, Record<string, unknown>> =
-  import.meta.glob(["./**/*.ts", "!./**/*.test.ts", "!./_generated/**"], {
-    eager: true,
-  });
+  import.meta.glob(
+    ["./**/*.ts", "!./**/*.test.ts", "!./convex.config.ts", "!./_generated/**"],
+    {
+      eager: true,
+    },
+  );
 
 /**
  * Convex validates args BEFORE the handler (and therefore before the guard)
@@ -59,6 +67,22 @@ const publicFunctionArgs: Record<string, Record<string, unknown>> = {
     periodMeta: { originGranularity: "annual", developmentInterval: "months" },
   },
   "triangles:getById": { workspaceId: "org_test" },
+  // createRun validates parameters (runParametersValidator) before the guard
+  // runs; supply a minimal valid set. triangleId injected at call time.
+  "runs:createRun": {
+    workspaceId: "org_test",
+    parameters: { methods: ["chain_ladder"], aprioriLossRatios: [] },
+  },
+  // getRun/getResultSet/getDiagnosticsBundle/retryRun take a v.id("runs")
+  // validated before the guard runs — a real run row id is injected at call time
+  // (like createRun's triangleId).
+  "runs:getRun": { workspaceId: "org_test" },
+  "runs:getResultSet": { workspaceId: "org_test" },
+  "runs:getDiagnosticsBundle": { workspaceId: "org_test" },
+  "runs:retryRun": { workspaceId: "org_test" },
+  // rederiveRun (Story 4.7) is a public ACTION; requireMember is its first
+  // statement, so an unauthenticated call is rejected before the engine fetch.
+  "runs:rederiveRun": { workspaceId: "org_test" },
 };
 
 type Harness = TestConvex<SchemaDefinition<GenericSchema, boolean>>;
@@ -187,6 +211,19 @@ describe("auth-guard enumeration (NFR-3)", () => {
           uploadedAt: "2026-07-18T00:00:00.000Z",
         }),
     );
+    // getRun/retryRun need a real v.id("runs"); seed a minimal queued run.
+    const runId = await t.run(
+      async (ctx) =>
+        await ctx.db.insert("runs", {
+          workspaceId: "org_test",
+          triangleId,
+          triangleHash: "seedhash",
+          status: "queued",
+          parameters: { methods: ["chain_ladder"], aprioriLossRatios: [] },
+          createdBy: "user_seed",
+          createdAt: "2026-07-19T00:00:00.000Z",
+        }),
+    );
     const argsFor = (path: string): Record<string, unknown> => {
       if (path === "triangles:createFromUpload") {
         return { ...publicFunctionArgs[path], storageId };
@@ -194,9 +231,19 @@ describe("auth-guard enumeration (NFR-3)", () => {
       if (
         path === "triangles:validateTriangle" ||
         path === "triangles:acceptTriangle" ||
-        path === "triangles:getById"
+        path === "triangles:getById" ||
+        path === "runs:createRun"
       ) {
         return { ...publicFunctionArgs[path], triangleId };
+      }
+      if (
+        path === "runs:getRun" ||
+        path === "runs:getResultSet" ||
+        path === "runs:getDiagnosticsBundle" ||
+        path === "runs:retryRun" ||
+        path === "runs:rederiveRun"
+      ) {
+        return { ...publicFunctionArgs[path], runId };
       }
       return publicFunctionArgs[path];
     };

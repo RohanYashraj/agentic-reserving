@@ -1,6 +1,11 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
-import { triangleValidator } from "./lib/engineContract";
+import {
+  diagnosticsBundleValidator,
+  resultSetValidator,
+  runParametersValidator,
+  triangleValidator,
+} from "./lib/engineContract";
 
 // Tables are defined just-in-time by the story that first needs them.
 export default defineSchema({
@@ -10,7 +15,11 @@ export default defineSchema({
   // tests/audit-append-only.test.ts and code review).
   auditLogs: defineTable({
     workspaceId: v.string(), // Clerk org ID — the Workspace
-    runId: v.optional(v.string()), // correlation key; v.id("runs") once Epic 4 adds the table
+    // Correlation key. Stays v.optional(v.string()) even though the `runs`
+    // table now exists (Epic 4): the chain also carries non-Run events (1.x/3.x
+    // entries have no runId), and run.created stringifies the new run's _id into
+    // it — a string correlation key, deliberately NOT widened to v.id("runs").
+    runId: v.optional(v.string()),
     actor: v.string(),
     eventType: v.string(),
     timestamp: v.string(), // ISO-8601 UTC
@@ -75,4 +84,59 @@ export default defineSchema({
     .index("by_workspace", ["workspaceId"])
     // Duplicate lookup + OCC-serialized insert-if-absent.
     .index("by_workspace_hash", ["workspaceId", "rawFileHash"]),
+
+  // Runs (FR-4, AD-7). Story 4.1 creates the job record; Story 4.2 runs it. The
+  // runs doc is the SOLE authority on status. The `status` union is the closed
+  // AD-7 vocabulary; 4.1 only ever writes `queued`. The
+  // `queued → running → complete | failed` transitions are written ONLY by
+  // Story 4.2's @convex-dev/workflow orchestration path (markRunning /
+  // storeResultSet / markRunFailed) — no other code path writes status. That
+  // path also fills the just-in-time result/diagnostics/error/timestamp fields
+  // below (all optional: a `queued` row carries none of them).
+  // Job-record-first: this row exists (atomically audited) before any
+  // orchestration touches it.
+  runs: defineTable({
+    workspaceId: v.string(), // Clerk org ID — the Workspace
+    triangleId: v.id("triangles"), // the Triangle this Run is over
+    // Denormalized copy of the Triangle's canonical triangleHash at creation
+    // (immutable provenance on the run record; the engine re-stamps the SAME
+    // value into ResultSet.lineage.triangleHash in 4.2 — storeResultSet asserts
+    // they match, AD-11 chain of custody).
+    triangleHash: v.string(),
+    status: v.union(
+      v.literal("queued"),
+      v.literal("running"),
+      v.literal("complete"),
+      v.literal("failed"),
+    ),
+    // { methods, aprioriLossRatios } — camelCase, engine-ready (sent to /runs
+    // verbatim in 4.2). Single-sourced from the engine contract.
+    parameters: runParametersValidator,
+    createdBy: v.string(), // Clerk user id (identity.subject)
+    createdAt: v.string(), // ISO-8601 UTC
+
+    // --- Orchestration fields (Story 4.2) ------------------------------------
+    // All optional: set ONLY by the @convex-dev/workflow orchestration path,
+    // absent on a freshly-queued row.
+    //
+    // The WorkflowId (stringified) from workflow.start, kept for status/cancel
+    // observability (4.3). Stored as a plain string — no component-type import
+    // into schema.ts.
+    workflowId: v.optional(v.string()),
+    // The schema-validated ResultSet / DiagnosticsBundle (AD-10), set together
+    // at `complete`. Typed by the shared engine-contract validators, so a
+    // schema-invalid engine response can never be stored here (storeResultSet's
+    // args are validated at the boundary).
+    resultSet: v.optional(resultSetValidator),
+    diagnosticsBundle: v.optional(diagnosticsBundleValidator),
+    // The failure reason, set at `failed` (engine error or a validation/hash
+    // mismatch surfaced via onRunComplete).
+    error: v.optional(v.object({ code: v.string(), message: v.string() })),
+    // Lifecycle timestamps, ISO-8601 UTC.
+    startedAt: v.optional(v.string()),
+    completedAt: v.optional(v.string()),
+    failedAt: v.optional(v.string()),
+  })
+    // Run listing per Workspace (Run detail 4.3 / dashboard Epic 7).
+    .index("by_workspace", ["workspaceId"]),
 });

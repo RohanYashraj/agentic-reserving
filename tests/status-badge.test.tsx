@@ -8,6 +8,7 @@ import { StatusBadge, type Status } from "@/components/StatusBadge";
 // running gets a pulsing dot, published is the published-green family.
 const families: Record<Status, string> = {
   draft: "bg-muted",
+  queued: "bg-muted",
   running: "bg-primary/10",
   complete: "bg-primary/10",
   failed: "bg-destructive/10",
@@ -15,6 +16,9 @@ const families: Record<Status, string> = {
   published: "bg-published-subtle",
   "engine-only": "bg-caution-subtle",
 };
+
+// The in-flight statuses that carry a pulsing dot (Story 4.3 added queued).
+const pulsingStatuses: Status[] = ["queued", "running"];
 
 const statuses = Object.keys(families) as Status[];
 
@@ -28,12 +32,12 @@ describe("StatusBadge", () => {
     });
   }
 
-  it("renders a pulsing dot for running, and for no other status", () => {
+  it("renders a pulsing dot for the in-flight statuses (running, queued), and for no other", () => {
     for (const status of statuses) {
       const { container, unmount } = render(<StatusBadge status={status} />);
       const dot = container.querySelector(".animate-pulse");
-      if (status === "running") {
-        expect(dot, "running must show a pulsing dot").not.toBeNull();
+      if (pulsingStatuses.includes(status)) {
+        expect(dot, `${status} must show a pulsing dot`).not.toBeNull();
         expect(
           dot?.getAttribute("aria-hidden"),
           "dot is decorative — label carries the meaning",

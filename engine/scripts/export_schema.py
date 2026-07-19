@@ -18,7 +18,13 @@ Never hand-edit the emitted files — they are generated artifacts.
 import json
 from pathlib import Path
 
-from reserving_engine import DiagnosticsBundle, ResultSet, Triangle, ValidationReport
+from reserving_engine import (
+    DiagnosticsBundle,
+    ReDerivationReport,
+    ResultSet,
+    Triangle,
+    ValidationReport,
+)
 
 # scripts/export_schema.py → parents[2] is the repo root.
 SCHEMAS_DIR = Path(__file__).resolve().parents[2] / "schemas"
@@ -35,6 +41,9 @@ _TARGETS = {
     DiagnosticsBundle: "diagnostics-bundle.schema.json",
     Triangle: "triangle.schema.json",
     ValidationReport: "validation-report.schema.json",
+    # Story 4.7: the re-derivation outcome crosses the Convex↔engine boundary
+    # (the /rederive response), so it earns full AD-10 drift rigor.
+    ReDerivationReport: "rederivation-report.schema.json",
 }
 
 

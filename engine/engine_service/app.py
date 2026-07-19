@@ -23,12 +23,14 @@ from engine_service.config import Settings, load_settings
 from engine_service.errors import register_exception_handlers
 from engine_service.models import (
     CanonicalizeResponse,
+    ReDeriveRequest,
     RunRequest,
     RunResponse,
     ValidateRequest,
 )
 from reserving_engine import (
     compute_diagnostics,
+    rederive,
     run_methods,
     triangle_hash,
     validate_triangle,
@@ -67,5 +69,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             diagnostics_bundle=bundle,
         )
         return JSONResponse(content=response.model_dump(mode="json", by_alias=True))
+
+    @app.post("/rederive", dependencies=[auth])
+    def rederive_run(request: ReDeriveRequest) -> JSONResponse:
+        # Story 4.7 (FR-6, AD-11): replay a stored ResultSet from its Lineage
+        # and compare. All comparison arithmetic (the discrepancy deltas, the
+        # exact/epsilon verdict) lives in reserving_engine.rederive — the shell
+        # computes no numbers (AD-1/AD-2), it only carries the report to the wire.
+        report = rederive(
+            request.triangle, request.stored_result_set, run_id=request.run_id
+        )
+        return JSONResponse(content=report.model_dump(mode="json", by_alias=True))
 
     return app

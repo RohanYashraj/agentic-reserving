@@ -1,5 +1,6 @@
 # generated: 2026-07-16
-# last_updated: 2026-07-18
+# last_updated: 2026-07-19
+# 4-7 status: backlog → ready-for-dev (create-story) → in-progress → review (dev-story)
 # project: agentic-reserving
 # project_key: NOKEY
 # tracking_system: file-system
@@ -42,6 +43,7 @@
 
 generated: 2026-07-16
 last_updated: 2026-07-19
+# 2026-07-19: epic-4 stories 4-1..4-7 → done after epic-4 code review (15 patches applied, 24 items deferred)
 project: agentic-reserving
 project_key: NOKEY
 tracking_system: file-system
@@ -71,14 +73,14 @@ development_status:
   3-3-period-confirmation-and-triangle-acceptance: done
   epic-3-retrospective: optional
 
-  epic-4: backlog
-  4-1-run-configuration-with-a-priori-grid: backlog
-  4-2-durable-run-orchestration-and-resultset-persistence: backlog
-  4-3-run-detail-with-step-rail-and-live-status: backlog
-  4-4-results-tab-with-provenance-popover: backlog
-  4-5-diagnostics-review-panels: backlog
-  4-6-diagnostic-context-rail-and-deep-linking: backlog
-  4-7-resultset-re-derivation-from-lineage: backlog
+  epic-4: in-progress
+  4-1-run-configuration-with-a-priori-grid: done
+  4-2-durable-run-orchestration-and-resultset-persistence: done
+  4-3-run-detail-with-step-rail-and-live-status: done
+  4-4-results-tab-with-provenance-popover: done
+  4-5-diagnostics-review-panels: done
+  4-6-diagnostic-context-rail-and-deep-linking: done
+  4-7-resultset-re-derivation-from-lineage: done
   epic-4-retrospective: optional
 
   epic-5: backlog

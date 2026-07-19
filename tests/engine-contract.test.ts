@@ -15,6 +15,7 @@ import { v } from "convex/values";
 
 import {
   diagnosticsBundleValidator,
+  reDerivationReportValidator,
   resultSetValidator,
   triangleValidator,
   validationReportValidator,
@@ -34,6 +35,7 @@ const resultSetSchema = readSchema("resultset.schema.json");
 const diagnosticsBundleSchema = readSchema("diagnostics-bundle.schema.json");
 const triangleSchema = readSchema("triangle.schema.json");
 const validationReportSchema = readSchema("validation-report.schema.json");
+const reDerivationReportSchema = readSchema("rederivation-report.schema.json");
 
 describe("AD-10 cross-runtime drift check", () => {
   it("ResultSet: committed JSON Schema matches the Convex validator", () => {
@@ -65,6 +67,17 @@ describe("AD-10 cross-runtime drift check", () => {
       validationReportSchema,
     );
     const fromValidator = validatorToCanonical(validationReportValidator);
+    expect(diffCanonical(fromSchema, fromValidator)).toEqual([]);
+  });
+
+  it("ReDerivationReport: committed JSON Schema matches the Convex validator", () => {
+    // Story 4.7: the /rederive response. `tier` is a string-literal union
+    // (exact | epsilon) — canonicalizes to an enum on both sides.
+    const fromSchema = jsonSchemaToCanonical(
+      reDerivationReportSchema,
+      reDerivationReportSchema,
+    );
+    const fromValidator = validatorToCanonical(reDerivationReportValidator);
     expect(diffCanonical(fromSchema, fromValidator)).toEqual([]);
   });
 });

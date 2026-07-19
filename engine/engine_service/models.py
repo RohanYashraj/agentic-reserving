@@ -9,7 +9,12 @@ carry their own aliases.
 
 from pydantic import BaseModel, field_validator
 
-from reserving_engine import DiagnosticsBundle, ResultSet, RunParameters, Triangle
+from reserving_engine import (
+    DiagnosticsBundle,
+    ResultSet,
+    RunParameters,
+    Triangle,
+)
 from reserving_engine.resultset import _MODEL_CONFIG
 
 
@@ -51,6 +56,27 @@ class RunResponse(BaseModel):
     run_id: str
     result_set: ResultSet
     diagnostics_bundle: DiagnosticsBundle
+
+
+class ReDeriveRequest(BaseModel):
+    """``POST /rederive`` body (Story 4.7, FR-6). Replays a stored ResultSet's
+    Lineage: the engine re-executes with ``triangle`` and the parameters read
+    from ``stored_result_set.lineage.parameters`` (re-deriving *from Lineage*,
+    not from a separate field), then compares against ``stored_result_set``.
+    ``run_id`` is the audit correlation key echoed onto the report."""
+
+    model_config = _MODEL_CONFIG
+
+    run_id: str
+    triangle: Triangle
+    stored_result_set: ResultSet
+
+    @field_validator("run_id")
+    @classmethod
+    def _non_empty_run_id(cls, value: str) -> str:
+        if not value:
+            raise ValueError("run_id must not be empty")
+        return value
 
 
 class CanonicalizeResponse(BaseModel):
