@@ -2243,3 +2243,292 @@ describe("generateReserveReport action — persist / audit / fail-closed (AC-2, 
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
+
+// --- Story 5.6: Engine-Only Mode fail-closed wiring (AC-1, AC-4, AD-9) -------
+
+async function modeRow(t: Harness, workspaceId = "org_A") {
+  const rows = await t.run((ctx) =>
+    ctx.db.query("interpretationModes").collect(),
+  );
+  return rows.find((r) => r.workspaceId === workspaceId) ?? null;
+}
+
+describe("recordInterpretationFailed — durable per-Run failure (AD-9)", () => {
+  test("patches runs.interpretationFailure + audits run.interpretationFailed", async () => {
+    const t = initConvexTest();
+    const runId = await seedInterpretableRun(t);
+
+    await t.mutation(internal.runs.recordInterpretationFailed, {
+      runId,
+      workspaceId: "org_A",
+      actor: "user_a",
+      reason: "cost_ceiling_exceeded",
+    });
+
+    const run = await getRun(t, runId);
+    expect(run?.interpretationFailure?.reason).toBe("cost_ceiling_exceeded");
+    expect(typeof run?.interpretationFailure?.at).toBe("number");
+    const audits = (await auditRows(t)).filter(
+      (a) => a.eventType === "run.interpretationFailed",
+    );
+    expect(audits).toHaveLength(1);
+    expect(audits[0].payload).toMatchObject({ runId, reason: "cost_ceiling_exceeded" });
+  });
+
+  test("no-ops on a vanished / cross-tenant run", async () => {
+    const t = initConvexTest();
+    const runId = await seedInterpretableRun(t, { workspaceId: "org_A" });
+    await t.mutation(internal.runs.recordInterpretationFailed, {
+      runId,
+      workspaceId: "org_B",
+      actor: "user_b",
+      reason: "model_unavailable",
+    });
+    expect((await getRun(t, runId))?.interpretationFailure).toBeUndefined();
+    expect(
+      (await auditRows(t)).filter((a) => a.eventType === "run.interpretationFailed"),
+    ).toHaveLength(0);
+  });
+
+  test("getRun surfaces interpretationFailure after reload (D2)", async () => {
+    const t = initConvexTest();
+    const runId = await seedInterpretableRun(t);
+    await t.mutation(internal.runs.recordInterpretationFailed, {
+      runId,
+      workspaceId: "org_A",
+      actor: "user_a",
+      reason: "model_unavailable",
+    });
+    const lean = await t
+      .withIdentity(analystA)
+      .query(api.runs.getRun, { workspaceId: "org_A", runId });
+    expect(lean?.interpretationFailure).toMatchObject({ reason: "model_unavailable" });
+  });
+});
+
+describe("generateRecommendations — fail-closed Engine-Only Mode (D1, AD-9)", () => {
+  beforeEach(() => {
+    vi.stubEnv("ENGINE_SERVICE_URL", "http://engine.test");
+    vi.stubEnv("ENGINE_SERVICE_SECRET", "test-secret");
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  test("model_unavailable → records failed + enters GLOBAL mode + re-throws", async () => {
+    const t = initConvexTest();
+    const runId = await seedInterpretableRun(t);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse({ code: "model_unavailable", message: "not configured" }, 503),
+      ),
+    );
+
+    let code: string | undefined;
+    try {
+      await t
+        .withIdentity(analystA)
+        .action(api.runs.generateRecommendations, { workspaceId: "org_A", runId });
+    } catch (error) {
+      code = (error as ConvexError<{ code: string }>).data.code;
+    }
+    expect(code).toBe("engine.model_unavailable"); // re-thrown
+
+    expect((await getRun(t, runId))?.interpretationFailure?.reason).toBe(
+      "model_unavailable",
+    );
+    expect(
+      (await auditRows(t)).filter((a) => a.eventType === "run.interpretationFailed"),
+    ).toHaveLength(1);
+    expect((await modeRow(t))?.engineOnly).toBe(true);
+    expect(
+      (await auditRows(t)).filter((a) => a.eventType === "mode.engineOnlyEntered"),
+    ).toHaveLength(1);
+  });
+
+  test("cost_ceiling_exceeded → per-Run failure only, NO global mode flip (D1)", async () => {
+    const t = initConvexTest();
+    const runId = await seedInterpretableRun(t);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse({ code: "cost_ceiling_exceeded", message: "ceiling" }, 503),
+      ),
+    );
+
+    let code: string | undefined;
+    try {
+      await t
+        .withIdentity(analystA)
+        .action(api.runs.generateRecommendations, { workspaceId: "org_A", runId });
+    } catch (error) {
+      code = (error as ConvexError<{ code: string }>).data.code;
+    }
+    expect(code).toBe("engine.cost_ceiling_exceeded");
+    expect((await getRun(t, runId))?.interpretationFailure?.reason).toBe(
+      "cost_ceiling_exceeded",
+    );
+    expect(await modeRow(t)).toBeNull();
+    expect(
+      (await auditRows(t)).filter((a) => a.eventType.startsWith("mode.")),
+    ).toHaveLength(0);
+  });
+
+  test("interpretation_timeout → per-Run failure only, no global flip", async () => {
+    const t = initConvexTest();
+    const runId = await seedInterpretableRun(t);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse({ code: "interpretation_timeout", message: "timed out" }, 503),
+      ),
+    );
+    let code: string | undefined;
+    try {
+      await t
+        .withIdentity(analystA)
+        .action(api.runs.generateRecommendations, { workspaceId: "org_A", runId });
+    } catch (error) {
+      code = (error as ConvexError<{ code: string }>).data.code;
+    }
+    expect(code).toBe("engine.interpretation_timeout");
+    expect((await getRun(t, runId))?.interpretationFailure?.reason).toBe(
+      "interpretation_timeout",
+    );
+    expect(await modeRow(t)).toBeNull();
+  });
+
+  test("a successful call after entering the mode clears it (self-heal, D3)", async () => {
+    const t = initConvexTest();
+    const runId = await seedInterpretableRun(t);
+    await t.mutation(internal.interpretationMode.transitionEngineOnlyMode, {
+      workspaceId: "org_A",
+      engineOnly: true,
+      actor: "user_seed",
+      reason: "model_unavailable",
+    });
+    const engineResponse = {
+      status: "accepted",
+      recommendations: makeRecommendations(runId),
+      attempts: SAMPLE_ATTEMPTS,
+      rejectionSummary: null,
+    };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(engineResponse)));
+
+    const out = await t
+      .withIdentity(analystA)
+      .action(api.runs.generateRecommendations, { workspaceId: "org_A", runId });
+
+    expect(out).toEqual({ status: "accepted" });
+    expect((await modeRow(t))?.engineOnly).toBe(false);
+    expect(
+      (await auditRows(t)).filter((a) => a.eventType === "mode.engineOnlyExited"),
+    ).toHaveLength(1);
+  });
+
+  test("transient ENGINE error leaves NO durable per-Run state", async () => {
+    const t = initConvexTest();
+    const runId = await seedInterpretableRun(t);
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("down")));
+    let code: string | undefined;
+    try {
+      await t
+        .withIdentity(analystA)
+        .action(api.runs.generateRecommendations, { workspaceId: "org_A", runId });
+    } catch (error) {
+      code = (error as ConvexError<{ code: string }>).data.code;
+    }
+    expect(code).toBe("ENGINE_UNAVAILABLE");
+    expect((await getRun(t, runId))?.interpretationFailure).toBeUndefined();
+    expect(await modeRow(t)).toBeNull();
+  });
+});
+
+describe("generateReserveReport — fail-closed Engine-Only Mode (D1, AD-9)", () => {
+  beforeEach(() => {
+    vi.stubEnv("ENGINE_SERVICE_URL", "http://engine.test");
+    vi.stubEnv("ENGINE_SERVICE_SECRET", "test-secret");
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  test("model_unavailable → records failed + enters GLOBAL mode + re-throws", async () => {
+    const t = initConvexTest();
+    const runId = await seedReportReadyRun(t);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse({ code: "model_unavailable", message: "not configured" }, 503),
+      ),
+    );
+    let code: string | undefined;
+    try {
+      await t
+        .withIdentity(analystA)
+        .action(api.runs.generateReserveReport, { workspaceId: "org_A", runId });
+    } catch (error) {
+      code = (error as ConvexError<{ code: string }>).data.code;
+    }
+    expect(code).toBe("engine.model_unavailable");
+    expect((await getRun(t, runId))?.interpretationFailure?.reason).toBe(
+      "model_unavailable",
+    );
+    expect((await modeRow(t))?.engineOnly).toBe(true);
+  });
+
+  test("cost_ceiling_exceeded → per-Run failure only, no global flip (D1)", async () => {
+    const t = initConvexTest();
+    const runId = await seedReportReadyRun(t);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse({ code: "cost_ceiling_exceeded", message: "ceiling" }, 503),
+      ),
+    );
+    let code: string | undefined;
+    try {
+      await t
+        .withIdentity(analystA)
+        .action(api.runs.generateReserveReport, { workspaceId: "org_A", runId });
+    } catch (error) {
+      code = (error as ConvexError<{ code: string }>).data.code;
+    }
+    expect(code).toBe("engine.cost_ceiling_exceeded");
+    expect((await getRun(t, runId))?.interpretationFailure?.reason).toBe(
+      "cost_ceiling_exceeded",
+    );
+    expect(await modeRow(t)).toBeNull();
+  });
+
+  test("a successful draft after entering the mode clears it (self-heal, D3)", async () => {
+    const t = initConvexTest();
+    const runId = await seedReportReadyRun(t);
+    await t.mutation(internal.interpretationMode.transitionEngineOnlyMode, {
+      workspaceId: "org_A",
+      engineOnly: true,
+      actor: "user_seed",
+      reason: "model_unavailable",
+    });
+    const engineResponse = {
+      status: "accepted",
+      report: makeReserveReport(runId),
+      attempts: SAMPLE_ATTEMPTS,
+      rejectionSummary: null,
+    };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(engineResponse)));
+
+    const out = await t
+      .withIdentity(analystA)
+      .action(api.runs.generateReserveReport, { workspaceId: "org_A", runId });
+
+    expect(out).toEqual({ status: "accepted" });
+    expect((await modeRow(t))?.engineOnly).toBe(false);
+    expect(
+      (await auditRows(t)).filter((a) => a.eventType === "mode.engineOnlyExited"),
+    ).toHaveLength(1);
+  });
+});

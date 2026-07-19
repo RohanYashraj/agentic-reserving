@@ -139,6 +139,27 @@ export default defineSchema({
     // be stored (storeRecommendations's arg is validated at the boundary, AD-10).
     // Absent until generateRecommendations succeeds; overwritten by a re-run.
     recommendations: v.optional(recommendationsValidator),
+    // Story 5.6 (AD-9): the durable per-Run interpretation-FAILURE state. Set
+    // when an Interpretation attempt fails closed — the model was unreachable
+    // (`model_unavailable`, which ALSO flips the workspace-global Engine-Only
+    // Mode), or this Run hit its per-Run token/cost ceiling or time limit
+    // (per-Run only, NOT global — D1). Distinct from `runs.status` (the AD-7
+    // enum stays queued|running|complete|failed) and from a gate rejection
+    // (`run.interpretationRejected`): a fail-closed attempt that could not
+    // run/complete. This closes 5.5's deferred durable *failed* state (survives
+    // reload, unlike the transient useAction flag); the durable *running* state
+    // still needs the async transport and stays deferred. Additive optional →
+    // no migration. Lean — the reason enum + timestamp, NO figures (AD-1).
+    interpretationFailure: v.optional(
+      v.object({
+        reason: v.union(
+          v.literal("model_unavailable"),
+          v.literal("cost_ceiling_exceeded"),
+          v.literal("interpretation_timeout"),
+        ),
+        at: v.number(),
+      }),
+    ),
     // The failure reason, set at `failed` (engine error or a validation/hash
     // mismatch surfaced via onRunComplete).
     error: v.optional(v.object({ code: v.string(), message: v.string() })),
@@ -175,5 +196,24 @@ export default defineSchema({
     // One report per run in 5.4 (re-draft overwrites); Epic 6 versions.
     .index("by_run", ["runId"])
     // Review-queue / dashboard listing (Epic 6/7).
+    .index("by_workspace", ["workspaceId"]),
+
+  // Engine-Only Mode state (Story 5.6, AD-9, D2). The per-Workspace, durable,
+  // SERVER-DERIVED system-of-record for the workspace-global Engine-Only Mode:
+  // written ONLY by server code (the two interpretation actions on model
+  // outage + the recovery probe) from the engine's typed response, never a
+  // client guess. The global banner + the run page SUBSCRIBE to it
+  // (`getInterpretationMode`, reactive, survives reload, no polling — FR-20).
+  // ONE row per Workspace (the global-mode singleton). Holds ONLY the derived
+  // Engine-Only flag + provenance of the last transition — never role/run-status
+  // (single-source-of-truth rule). NO figures (AD-1).
+  interpretationModes: defineTable({
+    workspaceId: v.string(), // Clerk org ID — the Workspace
+    engineOnly: v.boolean(), // the derived Engine-Only Mode flag
+    since: v.number(), // ms timestamp of the current-state transition
+    reason: v.optional(v.string()), // provenance of the last entry (e.g. "model_unavailable")
+    lastRunId: v.optional(v.id("runs")), // the Run whose failed attempt drove the last transition
+  })
+    // The singleton lookup + subscription per Workspace.
     .index("by_workspace", ["workspaceId"]),
 });

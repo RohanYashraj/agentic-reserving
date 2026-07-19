@@ -14,10 +14,15 @@ import json
 
 import pytest
 from agno.models.base import Model
+from agno.models.metrics import MessageMetrics
 from agno.models.response import ModelResponse
 
 from copilot_agent import build_gemini_model
 from copilot_agent.agent import ModelNotConfiguredError
+from engine_service.interpretation_errors import (
+    CostCeilingExceededError,
+    InterpretationTimeoutError,
+)
 from engine_service.recommendations_flow import (
     RecommendationsAccepted,
     RecommendationsFailed,
@@ -236,3 +241,119 @@ def test_model_not_configured_is_not_swallowed():
     # catches ModelNotConfiguredError as a redraftable rejection.
     with pytest.raises(ModelNotConfiguredError):
         build_gemini_model("", "")
+
+
+# --------------------------------------------------------------------------- #
+# Story 5.6 (AD-9, D5): fail-closed per-Run token ceiling + timeout + attempts #
+# --------------------------------------------------------------------------- #
+
+
+class _UsageModel(_ScriptedModel):
+    """A scripted model that ALSO reports token usage per turn (agno 2.5.x:
+    ModelResponse.response_usage → RunOutput.metrics.total_tokens). Lets the
+    token-ceiling test drive cumulative usage deterministically."""
+
+    def __init__(self, outputs: list[str], tokens_per_turn: int) -> None:
+        super().__init__(outputs)
+        self._tokens = tokens_per_turn
+
+    def invoke(self, *args, **kwargs) -> ModelResponse:
+        resp = super().invoke(*args, **kwargs)
+        resp.response_usage = MessageMetrics(
+            input_tokens=self._tokens // 2,
+            output_tokens=self._tokens - self._tokens // 2,
+            total_tokens=self._tokens,
+        )
+        return resp
+
+
+def _clock(times: list[float]):
+    """A deterministic injected clock returning successive values (D5)."""
+    it = iter(times)
+    return lambda: next(it)
+
+
+def test_token_ceiling_breach_raises_cost_ceiling():
+    result_set, bundle = _run()
+    origins = _origins(result_set)
+    dx_id = _real_dx(bundle)
+    # A persistently-rejected draft (missing an origin) so the loop wants to
+    # redraft; each turn reports 1000 tokens, well over the 100 ceiling.
+    bad = _draft_json(origins, dx_id, drop_first=True)
+    with pytest.raises(CostCeilingExceededError):
+        generate_recommendations(
+            _UsageModel([bad], tokens_per_turn=1000),
+            result_set,
+            bundle,
+            max_attempts=3,
+            token_ceiling=100,
+        )
+
+
+def test_within_token_ceiling_still_accepts():
+    result_set, bundle = _run()
+    origins = _origins(result_set)
+    dx_id = _real_dx(bundle)
+    good = _draft_json(origins, dx_id)
+    # A clean first attempt within a generous ceiling → accepted (the ceiling
+    # never trips on a successful bounded run).
+    outcome = generate_recommendations(
+        _UsageModel([good], tokens_per_turn=10),
+        result_set,
+        bundle,
+        token_ceiling=1_000_000,
+    )
+    assert isinstance(outcome, RecommendationsAccepted)
+
+
+def test_timeout_breach_raises_interpretation_timeout():
+    result_set, bundle = _run()
+    origins = _origins(result_set)
+    dx_id = _real_dx(bundle)
+    bad = _draft_json(origins, dx_id, drop_first=True)  # always rejected
+    # deadline = 0 + 600 = 600. iter1 check at t=0 (ok), attempt runs, iter2
+    # check at t=700 → past the deadline → fail closed.
+    with pytest.raises(InterpretationTimeoutError):
+        generate_recommendations(
+            _ScriptedModel([bad]),
+            result_set,
+            bundle,
+            max_attempts=3,
+            timeout_seconds=600.0,
+            now=_clock([0.0, 0.0, 700.0]),
+        )
+
+
+def test_max_attempts_from_config_is_honored():
+    result_set, bundle = _run()
+    origins = _origins(result_set)
+    dx_id = _real_dx(bundle)
+    bad = _draft_json(origins, dx_id, drop_first=True)  # always rejected
+    outcome = generate_recommendations(
+        _ScriptedModel([bad]), result_set, bundle, max_attempts=2
+    )
+    assert isinstance(outcome, RecommendationsFailed)
+    assert len(outcome.attempts) == 2
+    assert "2 attempts" in outcome.reason_summary
+
+
+def test_deterministic_under_fake_clock_and_scripted_model():
+    # Same scripted model + same fake clock → identical outcome (D5 determinism).
+    result_set, bundle = _run()
+    origins = _origins(result_set)
+    dx_id = _real_dx(bundle)
+    good = _draft_json(origins, dx_id)
+
+    def _outcome():
+        return generate_recommendations(
+            _ScriptedModel([good]),
+            result_set,
+            bundle,
+            timeout_seconds=600.0,
+            now=_clock([0.0, 1.0, 2.0, 3.0]),
+        )
+
+    a, b = _outcome(), _outcome()
+    assert isinstance(a, RecommendationsAccepted)
+    assert isinstance(b, RecommendationsAccepted)
+    assert a.recommendations.model_dump() == b.recommendations.model_dump()

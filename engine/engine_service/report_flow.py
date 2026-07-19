@@ -14,17 +14,23 @@ request, keeping the transient Agno session semantics (AD-3) and the
 agent+gate co-located. The Convex ``generateReserveReport`` action stays the
 thin persist+audit tail.
 
-It **reuses ``AttemptRecord``, ``AttemptRejection``, and ``MAX_ATTEMPTS`` from
-``recommendations_flow``** (they are generic: ``source``/``code``/``message``/
-``origin``/``token``/``details`` + ``transcript``; the section name rides in
+It **reuses ``AttemptRecord``, ``AttemptRejection``, ``MAX_ATTEMPTS`` and the
+shared ``enforce_interpretation_budget`` guard from ``recommendations_flow``**
+(they are generic: ``source``/``code``/``message``/``origin``/``token``/
+``details`` + ``transcript``; the section name rides in
 ``details={"section": name}``, so no edit to the 5.3 types is needed). One
-shared bounded-redraft ceiling; Story 5.6 turns it into config.
+shared bounded-redraft ceiling + one shared fail-closed budget guard; Story 5.6
+turns the ceiling/timeout/attempts into config.
 
-Determinism (AD-3): given a deterministic (scripted) ``model`` this function
-is deterministic — no clock, no randomness, no logging. HTTP/JSONResponse
-concerns stay OUT of this module (Task 5 owns the route).
+Determinism (AD-3): given a deterministic (scripted) ``model`` AND an injected
+``now`` clock this function is deterministic — no randomness, no logging. The
+timeout deadline is derived from the INJECTED ``now`` (Story 5.6, D5), never
+``time.monotonic`` inline. HTTP/JSONResponse concerns stay OUT of this module
+(Task 5 owns the route).
 """
 
+import time
+from collections.abc import Callable
 from typing import Literal
 
 from agno.models.base import Model
@@ -39,9 +45,11 @@ from copilot_agent import (
 )
 from engine_service.provenance_gate import GateRejected, run_provenance_gate
 from engine_service.recommendations_flow import (
+    DEFAULT_TIMEOUT_SECONDS,
     MAX_ATTEMPTS,
     AttemptRecord,
     AttemptRejection,
+    enforce_interpretation_budget,
 )
 from reserving_engine import (
     DiagnosticsBundle,
@@ -191,6 +199,9 @@ def generate_reserve_report(
     recommendations: Recommendations,
     *,
     max_attempts: int = MAX_ATTEMPTS,
+    token_ceiling: int | None = None,
+    timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+    now: Callable[[], float] = time.monotonic,
 ) -> ReserveReportOutcome:
     """Run the bounded draft-gate-validate loop (AC-1, AC-2, AC-4).
 
@@ -204,12 +215,24 @@ def generate_reserve_report(
     — never partial output. ``ModelNotConfiguredError`` from
     ``build_gemini_model`` is raised at the route BEFORE this loop (Task 5) and
     is never a redraftable rejection.
+
+    Story 5.6 (AD-9, D5): the identical fail-closed per-Run budget as
+    ``generate_recommendations`` — ``token_ceiling`` (cumulative model tokens,
+    ``None`` = unbounded) and ``timeout_seconds`` against a deadline from the
+    INJECTED ``now`` clock, enforced by the shared ``enforce_interpretation_budget``
+    guard before every model turn and once more at exhaustion. A breach raises
+    ``CostCeilingExceededError`` / ``InterpretationTimeoutError`` (503 envelopes).
     """
     instructions = build_report_prompt(result_set, diagnostics_bundle, recommendations)
     attempts: list[AttemptRecord] = []
     prior_rejections: tuple[AttemptRejection, ...] = ()
+    deadline = now() + timeout_seconds
+    cumulative_tokens = 0
 
     for _ in range(max_attempts):
+        # Fail-closed budget guard BEFORE spending a model turn (AD-9).
+        enforce_interpretation_budget(now, deadline, cumulative_tokens, token_ceiling)
+
         agent = build_interpretation_agent(
             model, result_set, diagnostics_bundle, instructions=instructions
         )
@@ -220,6 +243,7 @@ def generate_reserve_report(
         # Model-plane errors propagate to the caller (AD-9 fail-closed); they are
         # NOT swallowed as a redraftable rejection.
         result = run_interpretation(agent, prompt)
+        cumulative_tokens += result.token_count
 
         candidate, rejections = _evaluate_attempt(
             result.output_text, result_set, diagnostics_bundle
@@ -234,6 +258,11 @@ def generate_reserve_report(
             assert candidate is not None
             return ReserveReportAccepted(report=candidate, attempts=tuple(attempts))
         prior_rejections = rejections
+
+    # Exhausted the attempt budget with no clean draft. Re-check the budget so a
+    # timeout / over-ceiling condition fails closed (503) rather than a plain
+    # gate-exhaustion rejection.
+    enforce_interpretation_budget(now, deadline, cumulative_tokens, token_ceiling)
 
     last = attempts[-1].rejections if attempts else ()
     codes = sorted({rej.code for rej in last})

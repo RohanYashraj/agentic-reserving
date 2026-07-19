@@ -112,7 +112,12 @@ def create_app(
         # audit; ModelNotConfiguredError propagates to the error envelope (503).
         model = build_model()
         outcome = generate_recommendations(
-            model, request.result_set, request.diagnostics_bundle
+            model,
+            request.result_set,
+            request.diagnostics_bundle,
+            max_attempts=settings.interpretation_max_attempts,
+            token_ceiling=settings.interpretation_token_ceiling,
+            timeout_seconds=settings.interpretation_timeout_seconds,
         )
         response = RecommendResponse.from_outcome(request.run_id, outcome)
         return JSONResponse(content=response.model_dump(mode="json", by_alias=True))
@@ -127,9 +132,27 @@ def create_app(
         # propagates to the error envelope (503).
         model = build_model()
         outcome = generate_reserve_report(
-            model, request.result_set, request.diagnostics_bundle, request.recommendations
+            model,
+            request.result_set,
+            request.diagnostics_bundle,
+            request.recommendations,
+            max_attempts=settings.interpretation_max_attempts,
+            token_ceiling=settings.interpretation_token_ceiling,
+            timeout_seconds=settings.interpretation_timeout_seconds,
         )
         response = DraftReportResponse.from_outcome(request.run_id, outcome)
         return JSONResponse(content=response.model_dump(mode="json", by_alias=True))
+
+    @app.get("/interpretation/health", dependencies=[auth])
+    def interpretation_health() -> JSONResponse:
+        # Story 5.6 (AD-9, D3): the cheap "is the interpretation model reachable?"
+        # probe the Convex `probeInterpretationMode` action uses for Engine-Only
+        # Mode recovery. It builds the model via the `create_app` seam and returns
+        # 200 {"ok": true} on success; a missing/misconfigured model raises
+        # ModelNotConfiguredError → the existing _model_unavailable handler → 503
+        # `model_unavailable`. It runs NO interpretation (no ResultSet, no gate) —
+        # just the model build. The api key is never echoed (AD-12).
+        build_model()
+        return JSONResponse(content={"ok": True})
 
     return app

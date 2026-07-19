@@ -711,3 +711,91 @@ class TestReports:
         )
         assert resp.status_code == 422
         assert resp.json()["code"] == "bad_request"
+
+
+# --------------------------------------------------------------------------- #
+# Story 5.6: fail-closed budget envelopes (503) + /interpretation/health        #
+# --------------------------------------------------------------------------- #
+
+
+def _budget_client(*, token_ceiling=None, timeout_seconds=600.0) -> TestClient:
+    # A configured client whose interpretation ceiling/timeout are set to trip.
+    # The scripted model is never actually reached when the budget trips at the
+    # pre-attempt guard, so its output is irrelevant.
+    settings = Settings(
+        service_secret=TEST_SECRET,
+        gemini_api_key="k",
+        gemini_model_id="m",
+        interpretation_token_ceiling=token_ceiling,
+        interpretation_timeout_seconds=timeout_seconds,
+    )
+    return TestClient(
+        create_app(settings=settings, build_model=lambda: _ScriptedModel(["{}"]))
+    )
+
+
+class TestBudgetEnvelopes:
+    def test_recommendations_cost_ceiling_is_503_envelope(self) -> None:
+        # A zero token ceiling trips the fail-closed guard before any model turn.
+        result_set, bundle = _rec_run()
+        client = _budget_client(token_ceiling=0)
+        resp = client.post(
+            "/recommendations", json=_rec_body(REC_RUN_ID, result_set, bundle), headers=AUTH
+        )
+        assert resp.status_code == 503
+        body = resp.json()
+        assert body["code"] == "cost_ceiling_exceeded"
+        assert set(body) == {"code", "message", "details"}
+
+    def test_recommendations_timeout_is_503_envelope(self) -> None:
+        # A zero timeout makes the deadline already reached at the first guard.
+        result_set, bundle = _rec_run()
+        client = _budget_client(timeout_seconds=0.0)
+        resp = client.post(
+            "/recommendations", json=_rec_body(REC_RUN_ID, result_set, bundle), headers=AUTH
+        )
+        assert resp.status_code == 503
+        body = resp.json()
+        assert body["code"] == "interpretation_timeout"
+        assert set(body) == {"code", "message", "details"}
+
+    def test_reports_cost_ceiling_is_503_envelope(self) -> None:
+        result_set, bundle = _report_run()
+        client = _budget_client(token_ceiling=0)
+        resp = client.post(
+            "/reports", json=_report_body(REPORT_RUN_ID, result_set, bundle), headers=AUTH
+        )
+        assert resp.status_code == 503
+        assert resp.json()["code"] == "cost_ceiling_exceeded"
+
+    def test_reports_timeout_is_503_envelope(self) -> None:
+        result_set, bundle = _report_run()
+        client = _budget_client(timeout_seconds=0.0)
+        resp = client.post(
+            "/reports", json=_report_body(REPORT_RUN_ID, result_set, bundle), headers=AUTH
+        )
+        assert resp.status_code == 503
+        assert resp.json()["code"] == "interpretation_timeout"
+
+
+class TestInterpretationHealth:
+    def test_health_ok_when_model_builds(self) -> None:
+        client = _rec_client(lambda: _ScriptedModel(["{}"]))
+        resp = client.get("/interpretation/health", headers=AUTH)
+        assert resp.status_code == 200
+        assert resp.json() == {"ok": True}
+
+    def test_health_is_503_model_unavailable_when_unconfigured(self) -> None:
+        # No injected model + no key → build_gemini_model raises → 503 envelope.
+        client = _rec_client(None, gemini_key=None, gemini_model=None)
+        resp = client.get("/interpretation/health", headers=AUTH)
+        assert resp.status_code == 503
+        body = resp.json()
+        assert body["code"] == "model_unavailable"
+        assert set(body) == {"code", "message", "details"}
+
+    def test_health_requires_auth(self) -> None:
+        client = _rec_client(lambda: _ScriptedModel(["{}"]))
+        resp = client.get("/interpretation/health")
+        assert resp.status_code == 401
+        assert resp.json()["code"] == "unauthorized"

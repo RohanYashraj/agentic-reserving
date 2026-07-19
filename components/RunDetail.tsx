@@ -42,6 +42,12 @@ export type RunView = {
   // Story 5.5: gates the Interpretation tab (getRun returns it). A boolean —
   // NO figures leak (AD-1); the recommendations arrive via getRecommendations.
   hasRecommendations: boolean;
+  // Story 5.6: the durable per-Run interpretation-failure state (getRun returns
+  // it). Survives reload (D2); the reason enum + timestamp only, NO figures.
+  interpretationFailure: {
+    reason: "model_unavailable" | "cost_ceiling_exceeded" | "interpretation_timeout";
+    at: number;
+  } | null;
 };
 
 type TabKey = "results" | "diagnostics" | "interpretation" | "report";
@@ -80,6 +86,7 @@ export function RunDetail({
   onRetry,
   onRederive,
   onGenerateInterpretation,
+  engineOnly = false,
 }: {
   run: RunView;
   resultSet?: ResultSet | null;
@@ -87,6 +94,11 @@ export function RunDetail({
   // Story 5.5: the interpretation read surface (getRecommendations) — feeds both
   // the Interpretation tab and the Diagnostics rail's "cited by N" backlink.
   recommendations?: Recommendations | null;
+  // Story 5.6: the workspace-global Engine-Only Mode flag (run-scoped mirror of
+  // the global banner). Affects ONLY the Interpretation tab (disables its
+  // trigger) — Upload/Results/Diagnostics stay fully functional (NFR-2 / AC-3).
+  // Default false so pre-5.6 tests + the placeholder fallback still render.
+  engineOnly?: boolean;
   onRetry: () => Promise<void> | void;
   // Story 4.7: re-derive the stored ResultSet from its Lineage (FR-6). Optional
   // so the surface degrades cleanly where it is not wired (and pre-4.7 tests).
@@ -302,6 +314,7 @@ export function RunDetail({
               recommendations={recommendations ?? null}
               diagnosticsBundle={diagnosticsBundle ?? null}
               onGenerateInterpretation={onGenerateInterpretation}
+              engineOnly={engineOnly}
             />
           ) : (
             <TabPlaceholder>

@@ -56,6 +56,7 @@ function makeRun(overrides: Partial<RunView> = {}): RunView {
     hasResults: false,
     hasDiagnostics: false,
     hasRecommendations: false,
+    interpretationFailure: null,
     ...overrides,
   };
 }
@@ -310,6 +311,31 @@ describe("RunDetail (AC2, AC3, AC4)", () => {
       screen.getByText(/LDF stability by development period/i),
     ).toBeDefined();
     expect(screen.getByText(/Residual heatmap/i)).toBeDefined();
+  });
+
+  it("Engine-Only Mode (engineOnly=true): Diagnostics stay fully viewable, Interpretation trigger disabled (Story 5.6, AC-3/NFR-2)", () => {
+    render(
+      <RunDetail
+        run={makeRun({ status: "complete", hasResults: true, hasDiagnostics: true })}
+        diagnosticsBundle={makeDiagnosticsBundle()}
+        resultSet={undefined}
+        onRetry={vi.fn()}
+        onGenerateInterpretation={vi
+          .fn<() => Promise<{ status: "accepted" | "rejected" }>>()
+          .mockResolvedValue({ status: "accepted" })}
+        engineOnly
+      />,
+    );
+    // NFR-2 invariant: Diagnostics render fully while in Engine-Only Mode.
+    fireEvent.click(screen.getByRole("button", { name: "Diagnostics" }));
+    expect(
+      screen.getByText(/LDF stability by development period/i),
+    ).toBeDefined();
+    expect(screen.getByText(/Residual heatmap/i)).toBeDefined();
+    // The Interpretation trigger is disabled (AC-3).
+    fireEvent.focus(screen.getByRole("tab", { name: "Interpretation" }));
+    const button = screen.getByRole("button", { name: /Generate interpretation/i });
+    expect((button as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("deep link: a #<diagnosticId> hash opens the Diagnostics tab + selects it (Story 4.6, AC4)", () => {

@@ -10,6 +10,7 @@
 
 import type * as auditLogs from "../auditLogs.js";
 import type * as http from "../http.js";
+import type * as interpretationMode from "../interpretationMode.js";
 import type * as lib_auditChain from "../lib/auditChain.js";
 import type * as lib_clerkWebhook from "../lib/clerkWebhook.js";
 import type * as lib_engineClient from "../lib/engineClient.js";
@@ -31,6 +32,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   auditLogs: typeof auditLogs;
   http: typeof http;
+  interpretationMode: typeof interpretationMode;
   "lib/auditChain": typeof lib_auditChain;
   "lib/clerkWebhook": typeof lib_clerkWebhook;
   "lib/engineClient": typeof lib_engineClient;

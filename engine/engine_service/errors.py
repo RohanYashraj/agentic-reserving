@@ -15,6 +15,10 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from copilot_agent import ModelNotConfiguredError
+from engine_service.interpretation_errors import (
+    CostCeilingExceededError,
+    InterpretationTimeoutError,
+)
 from reserving_engine import InvalidAprioriError, InvalidTriangleError, MissingAprioriError
 
 
@@ -85,6 +89,31 @@ def register_exception_handlers(app: FastAPI) -> None:
             503,
             "model_unavailable",
             "the interpretation model is not configured for this deployment",
+        )
+
+    @app.exception_handler(CostCeilingExceededError)
+    async def _cost_ceiling(_request: Request, _exc: CostCeilingExceededError) -> JSONResponse:
+        # Story 5.6 (AD-9): the Run crossed its per-Run interpretation token
+        # ceiling. A fail-closed 503 (like model_unavailable) so callEngine
+        # surfaces `engine.cost_ceiling_exceeded` — the per-Run clean failure
+        # Story 5.6 records on the run record. Not a bug (no 500): a deliberate
+        # ceiling outcome. No details echo prompt content or the api key.
+        return _envelope(
+            503,
+            "cost_ceiling_exceeded",
+            "the interpretation reached the per-Run token/cost ceiling",
+        )
+
+    @app.exception_handler(InterpretationTimeoutError)
+    async def _interpretation_timeout(_request: Request, _exc: InterpretationTimeoutError) -> JSONResponse:
+        # Story 5.6 (AD-9, NFR-7): the interpretation exceeded its per-Run time
+        # limit. A fail-closed 503 so callEngine surfaces
+        # `engine.interpretation_timeout` — the per-Run clean failure Story 5.6
+        # records on the run record. A deliberate timeout outcome, not a 500 bug.
+        return _envelope(
+            503,
+            "interpretation_timeout",
+            "the interpretation exceeded the per-Run time limit",
         )
 
     @app.exception_handler(RequestValidationError)

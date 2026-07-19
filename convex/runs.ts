@@ -5,7 +5,7 @@ import { v } from "convex/values";
 import { appendAuditEntryInTransaction } from "./auditLogs";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import type { MutationCtx } from "./_generated/server";
+import type { ActionCtx, MutationCtx } from "./_generated/server";
 import {
   action,
   internalAction,
@@ -505,6 +505,10 @@ export const getRun = query({
       hasRecommendations: run.recommendations !== undefined,
       // Story 5.4: gates the Epic-6 Report tab — a boolean, NO figures leak.
       hasReserveReport: reserveReport !== null,
+      // Story 5.6: the durable per-Run interpretation-failure state (reason +
+      // timestamp) so the Interpretation tab renders it after reload (D2). Lean
+      // — the reason enum + `at` only, NO figures.
+      interpretationFailure: run.interpretationFailure ?? null,
     };
   },
 });
@@ -954,6 +958,44 @@ export const recordInterpretationRejection = internalMutation({
 });
 
 /**
+ * Record a FAIL-CLOSED Interpretation attempt (Story 5.6, AD-9). Distinct from
+ * `run.interpretationRejected` (a GATE rejection of a draft the model DID
+ * produce): `run.interpretationFailed` is the model/cost/timeout fail-closed —
+ * the attempt could not run or complete. Patches the durable per-Run
+ * `runs.interpretationFailure` (survives reload, D2) and audit-logs the failure
+ * (single writer). Guarded so a vanished / cross-tenant run no-ops. This does
+ * NOT touch `runs.status` (the AD-7 enum is unchanged) nor the workspace-global
+ * mode (that is `transitionEngineOnlyMode`'s job, wired in the action — D1).
+ * Lean payload — the reason + runId, NO figures (AD-1).
+ */
+export const recordInterpretationFailed = internalMutation({
+  args: {
+    runId: v.id("runs"),
+    workspaceId: v.string(),
+    actor: v.string(),
+    reason: v.union(
+      v.literal("model_unavailable"),
+      v.literal("cost_ceiling_exceeded"),
+      v.literal("interpretation_timeout"),
+    ),
+  },
+  handler: async (ctx, { runId, workspaceId, actor, reason }) => {
+    const run = await ctx.db.get(runId);
+    if (run === null || run.workspaceId !== workspaceId) return;
+    await ctx.db.patch(runId, {
+      interpretationFailure: { reason, at: Date.now() },
+    });
+    await appendAuditEntryInTransaction(ctx, {
+      workspaceId,
+      actor,
+      eventType: "run.interpretationFailed",
+      runId,
+      payload: { runId, reason },
+    });
+  },
+});
+
+/**
  * Record the TRIGGERING of an Interpretation — append a `run.interpretationTriggered`
  * audit entry (Story 5.5, AD-6/FR-15). Completion (`run.recommended`) and failure
  * (`run.interpretationRejected`) were already audited (5.3); this fills the missing
@@ -981,6 +1023,81 @@ export const recordInterpretationTriggered = internalMutation({
     });
   },
 });
+
+/**
+ * Story 5.6 (AD-9, D1): map a fail-closed engine error from an interpretation
+ * callEngine into durable per-Run state (+ the workspace-global Engine-Only Mode
+ * on model outage), shared by `generateRecommendations` and `generateReserveReport`.
+ * Does NOT re-throw — the caller re-throws so its inline error surface still
+ * shows (5.5). Only the three fail-closed engine codes leave durable state;
+ * transient `ENGINE_UNAVAILABLE`/`ENGINE_UNCONFIGURED` (and anything else) leave
+ * NOTHING (matches 5.5's retry surface). `model_unavailable` is the ONLY code
+ * that flips the global mode (D1 — a per-Run cost/timeout breach does not, to
+ * avoid a semantically-wrong global "interpretation unavailable" + a recovery
+ * deadlock).
+ */
+async function recordInterpretationFailureFromError(
+  ctx: ActionCtx,
+  {
+    err,
+    runId,
+    workspaceId,
+    actor,
+  }: { err: unknown; runId: Id<"runs">; workspaceId: string; actor: string },
+): Promise<void> {
+  const code =
+    err instanceof ConvexError
+      ? (err.data as { code?: string })?.code
+      : undefined;
+  if (code === "engine.model_unavailable") {
+    await ctx.runMutation(internal.runs.recordInterpretationFailed, {
+      runId,
+      workspaceId,
+      actor,
+      reason: "model_unavailable",
+    });
+    // Model plane down → enter the workspace-global Engine-Only Mode (D1).
+    await ctx.runMutation(internal.interpretationMode.transitionEngineOnlyMode, {
+      workspaceId,
+      engineOnly: true,
+      actor,
+      reason: "model_unavailable",
+      runId,
+    });
+  } else if (code === "engine.cost_ceiling_exceeded") {
+    await ctx.runMutation(internal.runs.recordInterpretationFailed, {
+      runId,
+      workspaceId,
+      actor,
+      reason: "cost_ceiling_exceeded",
+    });
+  } else if (code === "engine.interpretation_timeout") {
+    await ctx.runMutation(internal.runs.recordInterpretationFailed, {
+      runId,
+      workspaceId,
+      actor,
+      reason: "interpretation_timeout",
+    });
+  }
+  // Any other error (transient / unexpected) leaves NO durable state.
+}
+
+/**
+ * Clear the workspace-global Engine-Only Mode on a reachable interpretation call
+ * (D3 self-heal). Idempotent (D4) — a no-op when already not-Engine-Only, so the
+ * happy path adds one cheap read. Shared by both interpretation actions.
+ */
+async function clearEngineOnlyModeOnSuccess(
+  ctx: ActionCtx,
+  { runId, workspaceId, actor }: { runId: Id<"runs">; workspaceId: string; actor: string },
+): Promise<void> {
+  await ctx.runMutation(internal.interpretationMode.transitionEngineOnlyMode, {
+    workspaceId,
+    engineOnly: false,
+    actor,
+    runId,
+  });
+}
 
 /**
  * Generate per-Origin-Period Method recommendations through the Provenance Gate
@@ -1027,15 +1144,29 @@ export const generateRecommendations = action({
       actor,
     });
 
-    // callEngine maps the engine error envelope → engine.<code>; a missing model
-    // surfaces as `engine.model_unavailable` (the typed signal Story 5.6 keys
-    // Engine-Only Mode on) and propagates as-is, as do ENGINE_UNAVAILABLE /
-    // ENGINE_UNCONFIGURED (transient — the UI shows a retry, 5.5).
-    const response = await callEngine<RecommendResponse>("/recommendations", {
-      runId,
-      resultSet,
-      diagnosticsBundle,
-    });
+    // callEngine maps the engine error envelope → engine.<code>. Story 5.6
+    // (AD-9, D1): fail-closed codes leave durable state before re-throwing —
+    // `engine.model_unavailable` records the run failed AND flips the global
+    // Engine-Only Mode; `engine.cost_ceiling_exceeded` / `engine.interpretation_timeout`
+    // record the per-Run failure only (no global flip). Transient
+    // ENGINE_UNAVAILABLE / ENGINE_UNCONFIGURED leave NO durable state (5.5's
+    // retry surface). Every case re-throws so 5.5's inline error still shows.
+    let response: RecommendResponse;
+    try {
+      response = await callEngine<RecommendResponse>("/recommendations", {
+        runId,
+        resultSet,
+        diagnosticsBundle,
+      });
+    } catch (err) {
+      await recordInterpretationFailureFromError(ctx, {
+        err,
+        runId,
+        workspaceId,
+        actor,
+      });
+      throw err;
+    }
 
     // Defensive wire-shape guard (like rederiveRun's ENGINE_INVALID_RESPONSE):
     // callEngine casts the JSON unchecked, so validate before branching.
@@ -1049,6 +1180,10 @@ export const generateRecommendations = action({
         message: "The /recommendations response did not match the expected contract.",
       });
     }
+
+    // The model responded (accepted OR gate-rejected) → self-heal the global
+    // Engine-Only Mode if it was set (idempotent no-op otherwise, D3/D4).
+    await clearEngineOnlyModeOnSuccess(ctx, { runId, workspaceId, actor });
 
     if (response.status === "accepted") {
       if (response.recommendations === null) {
@@ -1300,16 +1435,27 @@ export const generateReserveReport = action({
       { runId, workspaceId },
     );
 
-    // callEngine maps the engine error envelope → engine.<code>; a missing model
-    // surfaces as `engine.model_unavailable` (the typed signal Story 5.6 keys
-    // Engine-Only Mode on) and propagates as-is, as do ENGINE_UNAVAILABLE /
-    // ENGINE_UNCONFIGURED (transient — the UI shows a retry, Epic 6).
-    const response = await callEngine<DraftReportResponse>("/reports", {
-      runId,
-      resultSet,
-      diagnosticsBundle,
-      recommendations,
-    });
+    // callEngine maps the engine error envelope → engine.<code>. Story 5.6
+    // (AD-9, D1): identical fail-closed wiring to generateRecommendations —
+    // model outage flips the global mode, cost/timeout are per-Run only,
+    // transient errors leave no durable state; every case re-throws.
+    let response: DraftReportResponse;
+    try {
+      response = await callEngine<DraftReportResponse>("/reports", {
+        runId,
+        resultSet,
+        diagnosticsBundle,
+        recommendations,
+      });
+    } catch (err) {
+      await recordInterpretationFailureFromError(ctx, {
+        err,
+        runId,
+        workspaceId,
+        actor,
+      });
+      throw err;
+    }
 
     // Defensive wire-shape guard (like generateRecommendations's
     // ENGINE_INVALID_RESPONSE): callEngine casts the JSON unchecked, so validate
@@ -1324,6 +1470,9 @@ export const generateReserveReport = action({
         message: "The /reports response did not match the expected contract.",
       });
     }
+
+    // The model responded → self-heal the global Engine-Only Mode (idempotent).
+    await clearEngineOnlyModeOnSuccess(ctx, { runId, workspaceId, actor });
 
     if (response.status === "accepted") {
       if (response.report === null) {

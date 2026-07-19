@@ -43,12 +43,14 @@
 
 generated: 2026-07-16
 last_updated: 2026-07-19
+# 2026-07-19: 5-6 → ready-for-dev (create-story)
 # 2026-07-19: epic-4 stories 4-1..4-7 → done after epic-4 code review (15 patches applied, 24 items deferred)
 # 2026-07-19: epic-5 → in-progress; 5-1 → ready-for-dev (create-story) → in-progress → review (dev-story)
 # 2026-07-19: 5-2 → ready-for-dev (create-story) → in-progress → review (dev-story)
 # 2026-07-19: 5-3 → ready-for-dev (create-story) → in-progress → review (dev-story)
 # 2026-07-19: 5-4 → ready-for-dev (create-story) → in-progress → review (dev-story)
 # 2026-07-19: 5-5 → ready-for-dev (create-story) → in-progress → review (dev-story)
+# 2026-07-19: 5-6 → in-progress → review (dev-story)
 project: agentic-reserving
 project_key: NOKEY
 tracking_system: file-system
@@ -94,7 +96,7 @@ development_status:
   5-3-method-recommendations-through-the-gate: review
   5-4-reserve-report-drafting-through-the-gate: review
   5-5-interpretation-tab-with-recommendation-table-and-citation-chips: review
-  5-6-engine-only-mode-fail-closed-degradation: backlog
+  5-6-engine-only-mode-fail-closed-degradation: review
   epic-5-retrospective: optional
 
   epic-6: backlog

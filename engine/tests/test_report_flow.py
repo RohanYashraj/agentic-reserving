@@ -15,10 +15,15 @@ import json
 
 import pytest
 from agno.models.base import Model
+from agno.models.metrics import MessageMetrics
 from agno.models.response import ModelResponse
 
 from copilot_agent import build_gemini_model
 from copilot_agent.agent import ModelNotConfiguredError
+from engine_service.interpretation_errors import (
+    CostCeilingExceededError,
+    InterpretationTimeoutError,
+)
 from engine_service.report_flow import (
     ReserveReportAccepted,
     ReserveReportFailed,
@@ -272,3 +277,63 @@ def test_unparseable_draft_is_rejected_and_retried():
 def test_model_not_configured_is_not_swallowed():
     with pytest.raises(ModelNotConfiguredError):
         build_gemini_model("", "")
+
+
+# --------------------------------------------------------------------------- #
+# Story 5.6 (AD-9, D5): fail-closed per-Run token ceiling + timeout (mirror)    #
+# --------------------------------------------------------------------------- #
+
+
+class _UsageModel(_ScriptedModel):
+    """Scripted model that also reports token usage per turn (Story 5.6)."""
+
+    def __init__(self, outputs: list[str], tokens_per_turn: int) -> None:
+        super().__init__(outputs)
+        self._tokens = tokens_per_turn
+
+    def invoke(self, *args, **kwargs) -> ModelResponse:
+        resp = super().invoke(*args, **kwargs)
+        resp.response_usage = MessageMetrics(
+            input_tokens=self._tokens // 2,
+            output_tokens=self._tokens - self._tokens // 2,
+            total_tokens=self._tokens,
+        )
+        return resp
+
+
+def _clock(times: list[float]):
+    it = iter(times)
+    return lambda: next(it)
+
+
+def test_token_ceiling_breach_raises_cost_ceiling():
+    result_set, bundle = _run()
+    dx_id = _real_dx(bundle)
+    recs = _recommendations(result_set, bundle)
+    bad = _draft_json(result_set, dx_id, blank_section="limitations")  # rejected
+    with pytest.raises(CostCeilingExceededError):
+        generate_reserve_report(
+            _UsageModel([bad], tokens_per_turn=1000),
+            result_set,
+            bundle,
+            recs,
+            max_attempts=3,
+            token_ceiling=100,
+        )
+
+
+def test_timeout_breach_raises_interpretation_timeout():
+    result_set, bundle = _run()
+    dx_id = _real_dx(bundle)
+    recs = _recommendations(result_set, bundle)
+    bad = _draft_json(result_set, dx_id, blank_section="limitations")  # rejected
+    with pytest.raises(InterpretationTimeoutError):
+        generate_reserve_report(
+            _ScriptedModel([bad]),
+            result_set,
+            bundle,
+            recs,
+            max_attempts=3,
+            timeout_seconds=600.0,
+            now=_clock([0.0, 0.0, 700.0]),
+        )

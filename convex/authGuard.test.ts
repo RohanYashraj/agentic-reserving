@@ -91,6 +91,11 @@ const publicFunctionArgs: Record<string, Record<string, unknown>> = {
   // generateReserveReport (Story 5.4) is a public ACTION; requireMember is its
   // first statement, so an unauthenticated call is rejected before the engine call.
   "runs:generateReserveReport": { workspaceId: "org_test" },
+  // Story 5.6 — the two new public Engine-Only Mode functions. getInterpretationMode
+  // is a query, probeInterpretationMode is an ACTION; each has requireMember as its
+  // first statement (AD-4). Neither takes a v.id("runs"), so no runId injection.
+  "interpretationMode:getInterpretationMode": { workspaceId: "org_test" },
+  "interpretationMode:probeInterpretationMode": { workspaceId: "org_test" },
 };
 
 type Harness = TestConvex<SchemaDefinition<GenericSchema, boolean>>;

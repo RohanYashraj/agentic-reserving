@@ -27,6 +27,7 @@ function makeRun(overrides: Partial<RunView> = {}): RunView {
     hasResults: true,
     hasDiagnostics: true,
     hasRecommendations: false,
+    interpretationFailure: null,
     ...overrides,
   };
 }
@@ -177,5 +178,93 @@ describe("InterpretationTab state machine (Story 5.5, AC1/AC4, UX-DR16)", () => 
     expect(screen.getByText("Reason for 2019.")).toBeDefined();
     expect(screen.queryByRole("button", { name: /Generate interpretation/i })).toBeNull();
     expect(container.querySelectorAll(".animate-pulse")).toHaveLength(0);
+  });
+});
+
+describe("InterpretationTab — Engine-Only Mode + durable failed state (Story 5.6, AC-3)", () => {
+  it("engineOnly + ready → the Generate button is disabled with a tooltip trigger", () => {
+    const { container } = render(
+      <InterpretationTab
+        run={makeRun()}
+        recommendations={null}
+        diagnosticsBundle={makeDiagnosticsBundle()}
+        onGenerateInterpretation={vi.fn()}
+        engineOnly
+      />,
+    );
+    const button = screen.getByRole("button", { name: /Generate interpretation/i });
+    expect((button as HTMLButtonElement).disabled).toBe(true);
+    // A focusable tooltip-trigger span wraps the disabled button.
+    expect(container.querySelector('[data-slot="tooltip-trigger"]')).not.toBeNull();
+  });
+
+  it("engineOnly false → the Generate button is enabled (no regression)", () => {
+    render(
+      <InterpretationTab
+        run={makeRun()}
+        recommendations={null}
+        diagnosticsBundle={makeDiagnosticsBundle()}
+        onGenerateInterpretation={vi.fn()}
+        engineOnly={false}
+      />,
+    );
+    const button = screen.getByRole("button", { name: /Generate interpretation/i });
+    expect((button as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("durable interpretationFailure(model_unavailable) → the failed copy renders (survives reload)", () => {
+    render(
+      <InterpretationTab
+        run={makeRun({
+          hasRecommendations: false,
+          interpretationFailure: { reason: "model_unavailable", at: 1 },
+        })}
+        recommendations={null}
+        diagnosticsBundle={makeDiagnosticsBundle()}
+        onGenerateInterpretation={vi.fn()}
+        engineOnly
+      />,
+    );
+    expect(
+      screen.getByText(/the interpretation model could not be reached/i),
+    ).toBeDefined();
+  });
+
+  it("durable interpretationFailure(cost_ceiling_exceeded) → the cost copy renders", () => {
+    render(
+      <InterpretationTab
+        run={makeRun({
+          interpretationFailure: { reason: "cost_ceiling_exceeded", at: 1 },
+        })}
+        recommendations={null}
+        diagnosticsBundle={makeDiagnosticsBundle()}
+        onGenerateInterpretation={vi.fn()}
+      />,
+    );
+    expect(
+      screen.getByText(/reached its interpretation cost ceiling/i),
+    ).toBeDefined();
+    // Not in the mode → the re-trigger is enabled for the per-Run reason.
+    const button = screen.getByRole("button", { name: /Generate interpretation/i });
+    expect((button as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("an accepted interpretation supersedes a prior durable failure", () => {
+    render(
+      <InterpretationTab
+        run={makeRun({
+          hasRecommendations: true,
+          interpretationFailure: { reason: "model_unavailable", at: 1 },
+        })}
+        recommendations={makeRecommendations()}
+        diagnosticsBundle={makeDiagnosticsBundle()}
+        onGenerateInterpretation={vi.fn()}
+      />,
+    );
+    // The table wins — the durable failed copy is not shown.
+    expect(screen.getByText("Reason for 2019.")).toBeDefined();
+    expect(
+      screen.queryByText(/the interpretation model could not be reached/i),
+    ).toBeNull();
   });
 });

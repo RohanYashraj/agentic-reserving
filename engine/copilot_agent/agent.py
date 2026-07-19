@@ -33,10 +33,19 @@ class ModelNotConfiguredError(RuntimeError):
 @dataclass(frozen=True)
 class InterpretationResult:
     """What ``run_interpretation`` returns to the caller: the model's
-    final text plus the full audit transcript."""
+    final text, the full audit transcript, and this turn's token usage.
+
+    ``token_count`` is the run-level total tokens Agno reports on the
+    ``RunOutput`` (``metrics.total_tokens``, agno 2.5.x — verified against
+    the installed version). It defaults to ``0`` when usage is unavailable
+    (a scripted/stub model with no live call — keeps deterministic tests
+    passing); the redraft loop accumulates it to enforce the per-Run token
+    ceiling (Story 5.6, AD-9). NEVER a reserve figure — a model-usage
+    integer, engine-side only (AD-1)."""
 
     output_text: str
     transcript: Transcript
+    token_count: int = 0
 
 
 def build_gemini_model(api_key: str, model_id: str) -> Gemini:
@@ -88,7 +97,13 @@ def run_interpretation(agent: Agent, prompt: str) -> InterpretationResult:
     retry / fail-closed (AD-9).
     """
     run_output = agent.run(prompt)
+    # Run-level token usage (agno 2.5.x: RunOutput.metrics.total_tokens).
+    # Defensive: metrics is `RunMetrics | None`, total_tokens may be None —
+    # a scripted/stub model reports nothing, so default to 0 (AD-9 / tests).
+    metrics = getattr(run_output, "metrics", None)
+    token_count = getattr(metrics, "total_tokens", 0) or 0
     return InterpretationResult(
         output_text=run_output.content or "",
         transcript=build_transcript(run_output.messages or []),
+        token_count=token_count,
     )

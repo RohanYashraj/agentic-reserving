@@ -55,6 +55,14 @@ export default function RunDetailPage() {
     api.runs.getRecommendations,
     orgId && run?.hasRecommendations ? { workspaceId: orgId, runId } : "skip",
   );
+  // Fifth subscription (Story 5.6): the workspace-global Engine-Only Mode. The
+  // banner subscribes to the same query in the app shell; Convex dedupes the two
+  // subscriptions, so this run-scoped mirror adds no extra server cost. It
+  // disables the Interpretation trigger while the mode holds (AC-3).
+  const mode = useQuery(
+    api.interpretationMode.getInterpretationMode,
+    orgId ? { workspaceId: orgId } : "skip",
+  );
   const retryRun = useMutation(api.runs.retryRun);
   // Story 4.7: re-derivation is an action (it fetches the engine). It returns
   // the ReDerivationReport to RunDetail, which holds it in local state.
@@ -132,6 +140,7 @@ export default function RunDetailPage() {
               resultSet={resultSet ?? null}
               diagnosticsBundle={diagnosticsBundle ?? null}
               recommendations={recommendations ?? null}
+              engineOnly={mode?.engineOnly ?? false}
               onRetry={onRetry}
               onRederive={onRederive}
               onGenerateInterpretation={onGenerateInterpretation}

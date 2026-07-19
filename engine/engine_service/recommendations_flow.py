@@ -14,12 +14,18 @@ failed and try again within one request, keeping the transient Agno session
 semantics (AD-3) and the agent+gate co-located. The Convex action stays the
 thin persist+audit tail (see the story Dev Notes).
 
-Determinism (AD-3): given a deterministic (scripted) ``model`` this function
-is deterministic — no clock, no randomness, no logging. The only prod
-nondeterminism is the live model, isolated behind the injected ``model``.
-HTTP/JSONResponse concerns stay OUT of this module (Task 5 owns the route).
+Determinism (AD-3): given a deterministic (scripted) ``model`` AND an injected
+``now`` clock this function is deterministic — no randomness, no logging. The
+timeout deadline is derived from the INJECTED ``now`` (Story 5.6, D5), not
+``time.monotonic`` inline, so tests pass a fake clock and the flow stays
+reproducible; prod passes the real monotonic clock (allowed in the shell,
+AD-2). The only prod nondeterminism is the live model, isolated behind the
+injected ``model``. HTTP/JSONResponse concerns stay OUT of this module (Task 5
+owns the route).
 """
 
+import time
+from collections.abc import Callable
 from typing import Literal
 
 from agno.models.base import Model
@@ -33,6 +39,10 @@ from copilot_agent import (
     parse_recommendation_draft,
     run_interpretation,
 )
+from engine_service.interpretation_errors import (
+    CostCeilingExceededError,
+    InterpretationTimeoutError,
+)
 from engine_service.provenance_gate import GateRejected, run_provenance_gate
 from reserving_engine import (
     DiagnosticsBundle,
@@ -44,10 +54,38 @@ from reserving_engine import (
 )
 from reserving_engine.resultset import _MODEL_CONFIG
 
-# The bounded redraft ceiling. A plain module constant in 5.3; Story 5.6 turns
-# it into engine_service config alongside the per-Run token/cost ceiling and the
-# interpretation timeout (AD-9). Keep it small — each attempt is a full model turn.
+# The bounded redraft ceiling — the config default for the "calls" bound
+# (INTERPRETATION_MAX_ATTEMPTS, Story 5.6, AD-9). The route threads the config
+# value explicitly (app.py); this default keeps back-compat for direct callers /
+# tests. Keep it small — each attempt is a full model turn.
 MAX_ATTEMPTS = 3
+
+# The default interpretation wall-clock timeout (seconds), mirroring
+# Settings.interpretation_timeout_seconds (NFR-7 ≤ 10 min). The route threads the
+# config value; this default keeps direct callers / tests unbounded in practice.
+DEFAULT_TIMEOUT_SECONDS = 600.0
+
+
+def enforce_interpretation_budget(
+    now: Callable[[], float],
+    deadline: float,
+    cumulative_tokens: int,
+    token_ceiling: int | None,
+) -> None:
+    """Fail-closed per-Run budget guard shared by both interpretation flows
+    (Story 5.6, AD-9, D5). Raises the timeout signal when the injected clock has
+    reached the deadline, or the cost-ceiling signal once cumulative token usage
+    has crossed the configured ceiling. Neither message echoes prompt content or
+    the api key (AD-12). A no-op when within budget (``token_ceiling`` None =
+    unbounded)."""
+    if now() >= deadline:
+        raise InterpretationTimeoutError(
+            "interpretation exceeded its per-Run time budget"
+        )
+    if token_ceiling is not None and cumulative_tokens >= token_ceiling:
+        raise CostCeilingExceededError(
+            "interpretation exceeded its per-Run token budget"
+        )
 
 # The user-turn trigger. The contract itself is taught in the agent's
 # instructions (``build_recommendation_prompt``); this just asks for output.
@@ -230,6 +268,9 @@ def generate_recommendations(
     diagnostics_bundle: DiagnosticsBundle,
     *,
     max_attempts: int = MAX_ATTEMPTS,
+    token_ceiling: int | None = None,
+    timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+    now: Callable[[], float] = time.monotonic,
 ) -> RecommendationsOutcome:
     """Run the bounded generate-gate-validate loop (AC-1, AC-2, AC-4).
 
@@ -241,12 +282,26 @@ def generate_recommendations(
     returns ``RecommendationsFailed`` carrying every transcript — never partial
     output. ``ModelNotConfiguredError`` from ``build_gemini_model`` is raised at
     the route BEFORE this loop (Task 5) and is never a redraftable rejection.
+
+    Story 5.6 (AD-9, D5) adds the fail-closed per-Run budget: ``token_ceiling``
+    (cumulative model tokens; ``None`` = unbounded) and ``timeout_seconds``
+    against a deadline derived from the INJECTED ``now`` clock. A breach raises
+    ``CostCeilingExceededError`` / ``InterpretationTimeoutError`` (503 envelopes,
+    NOT redraftable rejections, NOT bugs). The budget is checked before every
+    model turn and once more at exhaustion (so the last attempt pushing
+    cumulative over the ceiling still fails closed, not silently as an
+    exhausted-gate rejection).
     """
     instructions = build_recommendation_prompt(result_set, diagnostics_bundle)
     attempts: list[AttemptRecord] = []
     prior_rejections: tuple[AttemptRejection, ...] = ()
+    deadline = now() + timeout_seconds
+    cumulative_tokens = 0
 
     for _ in range(max_attempts):
+        # Fail-closed budget guard BEFORE spending a model turn (AD-9).
+        enforce_interpretation_budget(now, deadline, cumulative_tokens, token_ceiling)
+
         agent = build_interpretation_agent(
             model, result_set, diagnostics_bundle, instructions=instructions
         )
@@ -257,6 +312,7 @@ def generate_recommendations(
         # Model-plane errors propagate to the caller (AD-9 fail-closed); they are
         # NOT swallowed as a redraftable rejection.
         result = run_interpretation(agent, prompt)
+        cumulative_tokens += result.token_count
 
         candidate, rejections = _evaluate_attempt(
             result.output_text, result_set, diagnostics_bundle
@@ -273,6 +329,11 @@ def generate_recommendations(
                 recommendations=candidate, attempts=tuple(attempts)
             )
         prior_rejections = rejections
+
+    # Exhausted the attempt budget with no clean draft. Re-check the budget so a
+    # timeout / over-ceiling condition fails closed (503) rather than surfacing as
+    # a plain gate-exhaustion rejection.
+    enforce_interpretation_budget(now, deadline, cumulative_tokens, token_ceiling)
 
     last = attempts[-1].rejections if attempts else ()
     codes = sorted({rej.code for rej in last})
