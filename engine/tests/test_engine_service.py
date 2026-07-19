@@ -449,6 +449,7 @@ class TestRederive:
 
 import json  # noqa: E402
 
+from agno.exceptions import ModelProviderError  # noqa: E402
 from agno.models.base import Model  # noqa: E402
 from agno.models.response import ModelResponse  # noqa: E402
 
@@ -482,6 +483,24 @@ class _ScriptedModel(Model):
 
     def _parse_provider_response_delta(self, response) -> ModelResponse:
         return response
+
+
+class _RaisingModel(_ScriptedModel):
+    """A model that fails like a LIVE Gemini outage (review F16/F17): Agno
+    funnels provider failures through ``ModelProviderError``. Returns the ``pre``
+    scripted outputs first (attempts that complete before the outage, F6), then
+    raises on every subsequent call."""
+
+    def __init__(self, pre: list[str] | None = None) -> None:
+        super().__init__(pre or [])
+        self._pre = list(pre or [])
+
+    def invoke(self, *args, **kwargs) -> ModelResponse:
+        if self._i < len(self._pre):
+            return super().invoke(*args, **kwargs)
+        raise ModelProviderError(
+            message="gemini is down", model_name="scripted", model_id="x"
+        )
 
 
 REC_RUN_ID = "run-5-3-endpoint"
@@ -799,3 +818,52 @@ class TestInterpretationHealth:
         resp = client.get("/interpretation/health")
         assert resp.status_code == 401
         assert resp.json()["code"] == "unauthorized"
+
+    def test_health_is_503_when_model_configured_but_unreachable(self) -> None:
+        # Review F17: a configured-but-unreachable model must NOT report healthy.
+        # The probe issues a real model-plane call → ModelProviderError → 503
+        # model_unavailable, so recovery does not falsely clear Engine-Only Mode.
+        client = _rec_client(lambda: _RaisingModel())
+        resp = client.get("/interpretation/health", headers=AUTH)
+        assert resp.status_code == 503
+        body = resp.json()
+        assert body["code"] == "model_unavailable"
+        assert set(body) == {"code", "message", "details"}
+
+
+class TestRuntimeModelOutage:
+    def test_recommendations_runtime_outage_is_503_model_unavailable(self) -> None:
+        # Review F16: a LIVE outage (not just misconfig) fails closed into the same
+        # 503 model_unavailable so callEngine → engine.model_unavailable → Engine-Only.
+        result_set, bundle = _rec_run()
+        client = _rec_client(lambda: _RaisingModel())
+        resp = client.post(
+            "/recommendations", json=_rec_body(REC_RUN_ID, result_set, bundle), headers=AUTH
+        )
+        assert resp.status_code == 503
+        body = resp.json()
+        assert body["code"] == "model_unavailable"
+
+    def test_runtime_outage_after_completed_attempt_carries_transcripts(self) -> None:
+        # Review F6: attempt 1 completes (gate-rejected); the 503 carries its
+        # transcript in details.attempts so the LLM interaction is still audited.
+        result_set, bundle = _rec_run()
+        bad = _draft_json(result_set, bundle, drop_first=True)  # missing coverage → rejected
+        client = _rec_client(lambda: _RaisingModel(pre=[bad]))
+        resp = client.post(
+            "/recommendations", json=_rec_body(REC_RUN_ID, result_set, bundle), headers=AUTH
+        )
+        assert resp.status_code == 503
+        body = resp.json()
+        assert body["code"] == "model_unavailable"
+        assert body["details"] is not None
+        assert len(body["details"]["attempts"]) == 1
+
+    def test_reports_runtime_outage_is_503_model_unavailable(self) -> None:
+        result_set, bundle = _report_run()
+        client = _rec_client(lambda: _RaisingModel())
+        resp = client.post(
+            "/reports", json=_report_body(REPORT_RUN_ID, result_set, bundle), headers=AUTH
+        )
+        assert resp.status_code == 503
+        assert resp.json()["code"] == "model_unavailable"

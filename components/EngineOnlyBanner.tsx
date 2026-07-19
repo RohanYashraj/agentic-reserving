@@ -31,6 +31,11 @@ export function EngineOnlyBanner() {
   const [toast, setToast] = useState<string | null>(null);
   const [showWhatWorks, setShowWhatWorks] = useState(false);
   const [checking, setChecking] = useState(false);
+  // The text of the PERSISTENT assertive live region (see render). Empty except
+  // on the engine-only edge — populated below in the edge block so it changes
+  // (empty → copy) inside an already-mounted region, which is what assistive
+  // tech reliably announces (UX-DR4). Never set on the initial mount value.
+  const [announcement, setAnnouncement] = useState("");
 
   // Edge detection (D4): fire the toast ONCE per real transition. This is the
   // React "adjust state when a value changes" pattern — the previous value is
@@ -43,13 +48,15 @@ export function EngineOnlyBanner() {
   if (mode !== undefined && prevEngineOnly !== engineOnly) {
     setPrevEngineOnly(engineOnly);
     if (prevEngineOnly !== undefined) {
-      // A genuine flip → the ephemeral edge-cue. The banner strip's
-      // aria-live="assertive" region carries the once-per-edge announcement.
+      // A genuine flip → the ephemeral edge-cue AND the assertive announcement.
+      // The persistent live region below carries the once-per-edge announcement
+      // (populated on the entry edge, cleared on exit) so it fires reliably.
       setToast(
         engineOnly
           ? "Interpretation is temporarily unavailable — Engine-Only Mode."
           : "Interpretation restored.",
       );
+      setAnnouncement(engineOnly ? ENGINE_ONLY_COPY : "");
     }
   }
 
@@ -76,27 +83,44 @@ export function EngineOnlyBanner() {
     }
   }
 
+  // The PERSISTENT visually-hidden assertive live region. Always mounted (even
+  // when not in the mode, where it is empty) so its text changing empty → copy on
+  // the engine-only edge is announced by assistive tech that only watches regions
+  // present BEFORE the change (UX-DR4). "Once per edge" holds because
+  // `announcement` is set only on a genuine flip, never on the mount value.
+  const liveRegion = (
+    <div aria-live="assertive" aria-atomic="true" className="sr-only">
+      {announcement}
+    </div>
+  );
+
   if (!engineOnly) {
-    // Still render the (empty) assertive live region container is unnecessary
-    // when not in the mode; the toast may linger briefly to announce the exit.
-    return toast ? (
-      <div
-        role="status"
-        className="fixed bottom-4 right-4 z-50 rounded-md border border-border bg-popover px-4 py-2 text-sm text-popover-foreground shadow-md"
-      >
-        {toast}
-      </div>
-    ) : null;
+    // Not in the mode: keep the live region mounted (empty) and let a lingering
+    // exit toast announce the restore before it auto-dismisses.
+    return (
+      <>
+        {liveRegion}
+        {toast && (
+          <div
+            role="status"
+            className="fixed bottom-4 right-4 z-50 rounded-md border border-border bg-popover px-4 py-2 text-sm text-popover-foreground shadow-md"
+          >
+            {toast}
+          </div>
+        )}
+      </>
+    );
   }
 
   return (
     <>
+      {liveRegion}
+
       {/* Full-bleed caution strip — radius:0, zero elevation, no shadow
           (DESIGN.md:114 "a condition of the environment, not a floating
-          notification"). Spans the content column. aria-live="assertive" so the
-          entry is announced once (the effect above guards the single edge). */}
+          notification"). Spans the content column. The persistent region above
+          (not this strip) carries the assertive announcement. */}
       <div
-        aria-live="assertive"
         className="flex flex-col gap-1 border-b border-caution/30 bg-caution-subtle px-6 py-3 text-caution"
       >
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">

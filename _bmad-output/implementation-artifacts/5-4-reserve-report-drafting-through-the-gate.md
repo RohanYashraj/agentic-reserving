@@ -4,7 +4,7 @@ baseline_commit: 6d9f88b
 
 # Story 5.4: Reserve Report Drafting Through the Gate
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -294,3 +294,11 @@ Opus 4.8 (1M context) — `claude-opus-4-8[1m]`.
 | Date | Change |
 |---|---|
 | 2026-07-19 | Story 5.4 implemented: Reserve Report drafting through the Provenance Gate — pure `ReserveReport` contract + validator, agent draft/prompt/parser, bounded draft-gate-validate loop, `POST /reports` endpoint, dedicated `reserveReports` table with persistence + audit tail (`report.drafted` / `report.draftRejected`), and the `generateReserveReport` action. Full engine + Convex batteries green (one pre-existing cross-test flaky in `rederiveRun`, verified against baseline). Status → review. |
+
+### Review Findings
+
+_Code review 2026-07-19 (Epic 5 adversarial review, per-story parallel). Severity re-rated by triage._
+
+- [x] [Review][Defer] (low) Whitespace-only `run_id` accepted — `DraftReportRequest._non_empty_run_id` rejects only empty string, so `"   "` passes. [engine/engine_service/models.py] — deferred, pre-existing pattern inherited from `RecommendRequest`, already logged in deferred-work §5.3
+
+_No blocker/high/medium findings. Reviewer confirmed AC-1..AC-4 met; suspected issues (audit eventType union, runId chain-of-custody, `.unique()` concurrency, drift-check asymmetry) each verified clear. Two cosmetic items (vestigial `run_id` param in `from_outcome`; unused `result_set` param kept for signature symmetry) dismissed as intentional/documented._

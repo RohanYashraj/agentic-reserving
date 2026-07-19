@@ -18,9 +18,11 @@ BELOW ``engine_service`` (which hosts it). copilot_agent imports only
 
 from copilot_agent.agent import (
     InterpretationResult,
+    ModelCallError,
     ModelNotConfiguredError,
     build_gemini_model,
     build_interpretation_agent,
+    probe_model,
     run_interpretation,
 )
 from copilot_agent.recommendations import (
@@ -47,6 +49,7 @@ __all__ = [
     "DraftParseError",
     "InterpretationResult",
     "MethodRecommendationDraft",
+    "ModelCallError",
     "ModelNotConfiguredError",
     "RecommendationDraft",
     "ReserveReportDraft",
@@ -59,6 +62,7 @@ __all__ = [
     "build_recommendation_prompt",
     "build_report_prompt",
     "build_transcript",
+    "probe_model",
     "parse_recommendation_draft",
     "parse_report_draft",
     "run_interpretation",

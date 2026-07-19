@@ -4,7 +4,7 @@ baseline_commit: 9ea09f3
 
 # Story 5.2: Provenance Gate — Placeholder Rendering and Numeric Checker
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -188,3 +188,10 @@ claude-opus-4-8[1m] (Amelia / dev-story)
 | ---------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 2026-07-19 | 0.1     | Story 5.2 drafted: pure Provenance Gate primitive in `engine_service` — `{{rs:...}}`/`{{dx:...}}` placeholder rendering (cross-run + unresolvable + malformed guards), documented canonicalization rule (round half-to-even 2 dp), numeric-token checker against the engine source-value set with a structural-numeral whitelist, per-block claim-citation check, and a typed `GateAccepted`/`GateRejected` result (no `rendered_content` on failure). HTTP endpoint, Convex persistence, audit logging, and the bounded redraft loop explicitly deferred to 5.3/5.4; UI to 5.5. Status → ready-for-dev. |
 | 2026-07-19 | 1.0     | Story 5.2 implemented: `engine_service/provenance_gate.py` — `run_provenance_gate` (template injection first, numeric checker second, AD-5), `canonicalize_number` (round half-to-even 2 dp comparison key), `format_figure` (display separators, same precision), `engine_source_values` (structural walk of every ResultSet+DiagnosticsBundle numeric leaf, no computation AD-1), placeholder guards (cross-run/unresolvable/malformed/None-field/unresolvable-dx), pre-mask structural whitelist (years, ISO dates, line-start ordinals), per-paragraph claim-citation check, and typed `GateAccepted`/`GateRejected`/`GateRejection`/`CitationRef` (rejection carries no rendered content). `{{dx:...}}` inner is the full Diagnostic ID resolved verbatim (interpretation B). 17 new pytest across AC-1..AC-4. All gates green (pytest 259 passed/9 skipped; ruff; lint-imports 2 kept). No deps, no TS/Convex changes. Status → review. |
+
+### Review Findings
+
+_Code review 2026-07-19 (Epic 5 adversarial review, per-story parallel). Severity re-rated by triage._
+
+- [x] [Review][Patch] (HIGH) Line-start figure bypasses the numeric checker — the heading-ordinal whitelist `re.compile(r"(?m)^[#>\s*+-]*(?:\d+(?:\.\d+)+|\d+[.)])(?=\s|$)")` is magnitude-unbounded. A fabricated decimal at a line/paragraph start (`18834.50 is our reserve.` → matches `\d+(?:\.\d+)+`) or an integer with trailing `.`/`)` (`999999. The reserve…` → matches `\d+[.)]`) is masked to spaces BEFORE the numeric scan, so it never hits `_NUMBER_RE` (no `unsourced_number`) and produces no claim span (no `uncited_claim`). Directly defeats AD-1/AD-5 and AC-2; the code comment claiming line-start figures are "NOT exempted" is false. No test exercises a line-start figure, so it passed CI green. Fix: bound the ordinal whitelist (short digit count, and/or require it be the sole token on a heading line) and add a regression test with a large line-start figure. [engine/engine_service/provenance_gate.py:88]
+- [x] [Review][Defer] (low) Year-range whitelist `\b(?:19|20)\d{2}\b` is applied globally, not scoped to origin-column context — any 4-digit reserve figure in 1900–2099 mid-sentence is exempt from both checks. [engine/engine_service/provenance_gate.py:85] — deferred, documented residual (AC-2 asked for a year whitelist; scoping is a hardening follow-up)

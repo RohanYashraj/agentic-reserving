@@ -978,8 +978,14 @@ export const recordInterpretationFailed = internalMutation({
       v.literal("cost_ceiling_exceeded"),
       v.literal("interpretation_timeout"),
     ),
+    // Story 5.6 review F6: on a model outage, the transcripts of the attempts
+    // that COMPLETED before the outage ride here (from the engine's
+    // model_unavailable envelope details) so those LLM interactions are still
+    // audit-logged (AD-6/FR-15). Opaque JSON — audit payload only; the durable
+    // `interpretationFailure` stays lean (reason + at).
+    attempts: v.optional(v.any()),
   },
-  handler: async (ctx, { runId, workspaceId, actor, reason }) => {
+  handler: async (ctx, { runId, workspaceId, actor, reason, attempts }) => {
     const run = await ctx.db.get(runId);
     if (run === null || run.workspaceId !== workspaceId) return;
     await ctx.db.patch(runId, {
@@ -990,7 +996,11 @@ export const recordInterpretationFailed = internalMutation({
       actor,
       eventType: "run.interpretationFailed",
       runId,
-      payload: { runId, reason },
+      payload: {
+        runId,
+        reason,
+        ...(attempts !== undefined ? { attempts } : {}),
+      },
     });
   },
 });
@@ -1045,16 +1055,20 @@ async function recordInterpretationFailureFromError(
     actor,
   }: { err: unknown; runId: Id<"runs">; workspaceId: string; actor: string },
 ): Promise<void> {
-  const code =
+  const data =
     err instanceof ConvexError
-      ? (err.data as { code?: string })?.code
+      ? (err.data as { code?: string; details?: { attempts?: unknown } })
       : undefined;
+  const code = data?.code;
   if (code === "engine.model_unavailable") {
     await ctx.runMutation(internal.runs.recordInterpretationFailed, {
       runId,
       workspaceId,
       actor,
       reason: "model_unavailable",
+      // Review F6: audit the completed attempts' transcripts carried in the
+      // 503 envelope (undefined for a misconfig/from-first-call outage).
+      attempts: data?.details?.attempts,
     });
     // Model plane down → enter the workspace-global Engine-Only Mode (D1).
     await ctx.runMutation(internal.interpretationMode.transitionEngineOnlyMode, {

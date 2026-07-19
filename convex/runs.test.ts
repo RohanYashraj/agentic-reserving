@@ -1803,6 +1803,50 @@ describe("generateRecommendations action — persist / audit / fail-closed (AC-2
     expect((await getRun(t, runId))?.recommendations).toBeUndefined();
   });
 
+  test("model_unavailable records the run failed, enters Engine-Only Mode, and audits carried transcripts (review F16/F6)", async () => {
+    const t = initConvexTest();
+    const runId = await seedInterpretableRun(t);
+    // A LIVE outage 503 that carries the completed attempts' transcripts in
+    // details.attempts (engine review F6).
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse(
+          {
+            code: "model_unavailable",
+            message: "the interpretation model is currently unavailable",
+            details: { attempts: SAMPLE_ATTEMPTS },
+          },
+          503,
+        ),
+      ),
+    );
+
+    await expect(
+      t
+        .withIdentity(analystA)
+        .action(api.runs.generateRecommendations, { workspaceId: "org_A", runId }),
+    ).rejects.toThrow();
+
+    // F16: the per-Run durable failure is recorded and the workspace-global
+    // Engine-Only Mode is entered.
+    expect((await getRun(t, runId))?.interpretationFailure?.reason).toBe(
+      "model_unavailable",
+    );
+    const entered = (await auditRows(t)).filter(
+      (a) => a.eventType === "mode.engineOnlyEntered",
+    );
+    expect(entered).toHaveLength(1);
+
+    // F6: the completed attempts' transcripts are audit-logged on the failure,
+    // not lost.
+    const failed = (await auditRows(t)).filter(
+      (a) => a.eventType === "run.interpretationFailed",
+    );
+    expect(failed).toHaveLength(1);
+    expect(failed[0].payload).toMatchObject({ attempts: SAMPLE_ATTEMPTS });
+  });
+
   test("a non-interpretable run is RUN_NOT_INTERPRETABLE (no engine call)", async () => {
     const t = initConvexTest();
     const triangleId = await seedValidatedTriangle(t);

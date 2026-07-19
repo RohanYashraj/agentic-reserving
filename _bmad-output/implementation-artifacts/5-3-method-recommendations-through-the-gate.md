@@ -4,7 +4,7 @@ baseline_commit: 7bda36c
 
 # Story 5.3: Method Recommendations Through the Gate
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -267,3 +267,11 @@ claude-opus-4-8[1m] (Claude Opus 4.8, 1M context)
 ### Change Log
 
 - 2026-07-19: Story 5.3 implemented — Method recommendations through the Provenance Gate. Pure contract + structural validator (`reserving_engine`), agent draft/prompt/parser (`copilot_agent`), bounded generate-gate-validate loop + `/recommendations` endpoint (`engine_service`), Convex persistence + audit tail + `generateRecommendations` action. Full Python + Convex batteries green; AD-10 drift contract extended to `Recommendations`.
+
+### Review Findings
+
+_Code review 2026-07-19 (Epic 5 adversarial review, per-story parallel). Severity re-rated by triage._
+
+- [x] [Review][Patch] (medium) [resolved: preserve + audit partials] Mid-loop model error discards already-collected transcripts — if `run_interpretation` raises on attempt N>1, prior completed attempts' transcripts live only in the local `attempts` list and are lost when the exception unwinds to a 500/ENGINE_UNAVAILABLE; those LLM interactions are never appended to the Audit Log, contradicting AD-6/FR-15 ("every LLM interaction is audit-logged"). Related to the Story 5.6 model-error handling decision. Choice needed: preserve+return accumulated transcripts on model error vs. accept the loss as fail-closed. [engine/engine_service/recommendations_flow.py:265-345]
+- [x] [Review][Patch] (low) Prompt advertises all rs-fields (incl. `mackStdErr`) even when `mack` was not executed — on a chain-ladder-only Run the model is invited to write `{{rs:...:mackStdErr}}`, the gate rejects it (`unresolvable_rs_placeholder`), burning a redraft attempt toward exhaustion. Gate field advertising on executed methods only. [engine/copilot_agent/recommendations.py:47]
+- [x] [Review][Patch] (low) Duplicate `{{dx:...}}` citations in one reason are not de-duplicated — a reason citing the same Diagnostic twice persists `citations=("X","X")`, and Story 5.5's CitationChip renders the chip twice. De-dupe while preserving order. [engine/engine_service/recommendations_flow.py:189-194]

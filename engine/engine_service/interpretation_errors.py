@@ -22,3 +22,24 @@ class CostCeilingExceededError(RuntimeError):
 class InterpretationTimeoutError(RuntimeError):
     """The interpretation redraft loop exceeded the configured
     ``INTERPRETATION_TIMEOUT_SECONDS`` deadline (Story 5.6, NFR-7)."""
+
+
+class ModelUnavailableError(RuntimeError):
+    """A LIVE model-plane outage (``copilot_agent.ModelCallError``) that
+    persisted across the whole attempt budget (Story 5.6 review F16).
+
+    Mapped by ``errors.py`` to the SAME 503 ``model_unavailable`` envelope as
+    ``ModelNotConfiguredError``, so a genuine RUNTIME outage — not only
+    misconfiguration — makes ``callEngine`` surface ``engine.model_unavailable``
+    and Convex enter the workspace-global Engine-Only Mode (AC-1).
+
+    ``attempts`` carries the JSON-serialized transcripts of the attempts that
+    COMPLETED before the outage, so those already-happened LLM interactions are
+    still audit-logged rather than lost when the request fails closed (review
+    F6). Empty when the model was down from the first call. This module stays
+    dependency-free (no FastAPI, no pydantic import) — the flow serializes the
+    transcripts before raising."""
+
+    def __init__(self, message: str, *, attempts: tuple[object, ...] = ()) -> None:
+        super().__init__(message)
+        self.attempts = attempts

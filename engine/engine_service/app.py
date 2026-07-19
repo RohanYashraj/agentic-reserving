@@ -21,10 +21,11 @@ from agno.models.base import Model
 from fastapi import Depends, FastAPI
 from fastapi.responses import JSONResponse
 
-from copilot_agent import build_gemini_model
+from copilot_agent import ModelCallError, build_gemini_model, probe_model
 from engine_service.auth import make_service_auth
 from engine_service.config import Settings, load_settings
 from engine_service.errors import register_exception_handlers
+from engine_service.interpretation_errors import ModelUnavailableError
 from engine_service.models import (
     CanonicalizeResponse,
     DraftReportRequest,
@@ -61,7 +62,14 @@ def create_app(
     # inject a scripted model via `build_model` without a live key.
     if build_model is None:
         def build_model() -> Model:
-            return build_gemini_model(settings.gemini_api_key, settings.gemini_model_id)
+            # Story 5.6 review F18: pass the per-Run interpretation timeout as the
+            # hard per-call wall-clock bound (the SDK aborts a hung Gemini call at
+            # http_options.timeout), so a single hung call cannot exceed NFR-7.
+            return build_gemini_model(
+                settings.gemini_api_key,
+                settings.gemini_model_id,
+                timeout=settings.interpretation_timeout_seconds,
+            )
 
     app = FastAPI(title="engine_service", version="0.1.0")
     register_exception_handlers(app)
@@ -145,14 +153,23 @@ def create_app(
 
     @app.get("/interpretation/health", dependencies=[auth])
     def interpretation_health() -> JSONResponse:
-        # Story 5.6 (AD-9, D3): the cheap "is the interpretation model reachable?"
-        # probe the Convex `probeInterpretationMode` action uses for Engine-Only
-        # Mode recovery. It builds the model via the `create_app` seam and returns
-        # 200 {"ok": true} on success; a missing/misconfigured model raises
-        # ModelNotConfiguredError → the existing _model_unavailable handler → 503
-        # `model_unavailable`. It runs NO interpretation (no ResultSet, no gate) —
-        # just the model build. The api key is never echoed (AD-12).
-        build_model()
+        # Story 5.6 (AD-9, D3): the "is the interpretation model reachable?" probe
+        # the Convex `probeInterpretationMode` action uses for Engine-Only Mode
+        # recovery. A missing/misconfigured model raises ModelNotConfiguredError →
+        # 503 `model_unavailable`. Review F17: building the model only proves it is
+        # CONFIGURED, not REACHABLE — a live Gemini outage would otherwise return
+        # 200 and falsely clear Engine-Only Mode. So we also issue one minimal
+        # model-plane call (`probe_model`); a live outage raises ModelCallError →
+        # 503 `model_unavailable`, keeping the workspace in Engine-Only Mode until
+        # the model genuinely recovers. Runs no interpretation (no ResultSet, no
+        # gate); the api key is never echoed (AD-12).
+        model = build_model()
+        try:
+            probe_model(model)
+        except ModelCallError as exc:
+            raise ModelUnavailableError(
+                "the interpretation model is not reachable"
+            ) from exc
         return JSONResponse(content={"ok": True})
 
     return app

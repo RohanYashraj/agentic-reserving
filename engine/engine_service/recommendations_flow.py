@@ -33,6 +33,7 @@ from pydantic import BaseModel, ValidationError
 
 from copilot_agent import (
     DraftParseError,
+    ModelCallError,
     Transcript,
     build_interpretation_agent,
     build_recommendation_prompt,
@@ -42,6 +43,7 @@ from copilot_agent import (
 from engine_service.interpretation_errors import (
     CostCeilingExceededError,
     InterpretationTimeoutError,
+    ModelUnavailableError,
 )
 from engine_service.provenance_gate import GateRejected, run_provenance_gate
 from reserving_engine import (
@@ -189,7 +191,12 @@ def _gate_reasons(
         accepted.append(
             RecommendationReason(
                 text=result.rendered_content,
-                citations=tuple(c.diagnostic_id for c in result.citations),
+                # De-duplicate repeated {{dx:...}} citations while preserving
+                # first-seen order (review F8): one reason citing the same
+                # Diagnostic twice must persist a single chip, not two.
+                citations=tuple(
+                    dict.fromkeys(c.diagnostic_id for c in result.citations)
+                ),
             )
         )
     return tuple(accepted), rejections
@@ -297,6 +304,7 @@ def generate_recommendations(
     prior_rejections: tuple[AttemptRejection, ...] = ()
     deadline = now() + timeout_seconds
     cumulative_tokens = 0
+    last_model_error: ModelCallError | None = None
 
     for _ in range(max_attempts):
         # Fail-closed budget guard BEFORE spending a model turn (AD-9).
@@ -309,9 +317,19 @@ def generate_recommendations(
         if prior_rejections:
             prompt = f"{prompt}\n\n{_redraft_feedback(prior_rejections)}"
 
-        # Model-plane errors propagate to the caller (AD-9 fail-closed); they are
-        # NOT swallowed as a redraftable rejection.
-        result = run_interpretation(agent, prompt)
+        # A LIVE model-plane failure (review F16) is NOT a redraftable rejection:
+        # the model produced no draft to critique. Retry within the attempt +
+        # time budget (a transient blip may clear); a persistent outage exits the
+        # loop and fails closed into model_unavailable below. Transcripts of the
+        # attempts that DID complete stay in ``attempts`` and are carried into the
+        # fail-closed error for audit (review F6).
+        try:
+            result = run_interpretation(agent, prompt)
+        except ModelCallError as exc:
+            last_model_error = exc
+            prior_rejections = ()
+            continue
+        last_model_error = None
         cumulative_tokens += result.token_count
 
         candidate, rejections = _evaluate_attempt(
@@ -329,6 +347,19 @@ def generate_recommendations(
                 recommendations=candidate, attempts=tuple(attempts)
             )
         prior_rejections = rejections
+
+    # A live model outage was the terminal condition (review F16): fail closed
+    # into model_unavailable → Engine-Only Mode, carrying every completed
+    # attempt's transcript for audit (review F6). Checked BEFORE the budget
+    # re-check so a genuine outage is not misreported as a timeout.
+    if last_model_error is not None:
+        raise ModelUnavailableError(
+            f"the interpretation model was unavailable across {max_attempts} "
+            "attempt(s)",
+            attempts=tuple(
+                a.model_dump(mode="json", by_alias=True) for a in attempts
+            ),
+        )
 
     # Exhausted the attempt budget with no clean draft. Re-check the budget so a
     # timeout / over-ceiling condition fails closed (503) rather than surfacing as

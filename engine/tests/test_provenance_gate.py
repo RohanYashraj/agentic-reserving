@@ -252,6 +252,38 @@ def test_non_whitelisted_figure_still_fails_amid_structural(run):
     assert "unsourced_number" in _codes(result)
 
 
+def test_line_start_decimal_figure_is_not_whitelisted_as_ordinal(run):
+    # Review F3 (gate bypass): a fabricated decimal figure at a line/paragraph
+    # start (the first token of a bullet or sentence) must NOT be masked by the
+    # heading-ordinal whitelist before the numeric scan. Pre-fix, "18834.50 …"
+    # matched `\d+(?:\.\d+)+` and bypassed BOTH the source-value and uncited-claim
+    # checks — a fabricated reserve slipped through as accepted.
+    result_set, bundle = run
+    draft = "18834.50 is our recommended reserve."
+    result = run_provenance_gate(draft, result_set, bundle)
+    assert isinstance(result, GateRejected)
+    assert "unsourced_number" in _codes(result)
+
+
+def test_line_start_integer_with_trailing_dot_is_not_whitelisted(run):
+    # Review F3: "999999. The reserve…" matched `\d+[.)]` pre-fix and was exempted.
+    result_set, bundle = run
+    draft = "999999. The reserve is comfortable."
+    result = run_provenance_gate(draft, result_set, bundle)
+    assert isinstance(result, GateRejected)
+    assert "unsourced_number" in _codes(result)
+
+
+def test_genuine_small_ordinals_remain_whitelisted(run):
+    # Review F3: small structural ordinals (1–2-digit segments) still pass, so the
+    # tightened bound does not over-reject real headings / numbered lists.
+    result_set, bundle = run
+    draft = "## 10. Summary\n\n3.2.1 Sub-point\n\n42) A list item"
+    result = run_provenance_gate(draft, result_set, bundle)
+    assert isinstance(result, GateAccepted)
+    assert result.citations == ()
+
+
 # --- Task 6.10: accumulation + never-persist ------------------------------
 
 

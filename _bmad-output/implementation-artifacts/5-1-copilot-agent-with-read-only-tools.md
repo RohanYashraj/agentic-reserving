@@ -4,7 +4,7 @@ baseline_commit: 7d18071
 
 # Story 5.1: copilot_agent with Read-Only Tools
 
-Status: review
+Status: done
 
 ## Story
 
@@ -186,3 +186,9 @@ claude-opus-4-8[1m] (Amelia / dev-story)
 | ---------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 2026-07-19 | 0.1     | Story 5.1 drafted: `copilot_agent` Agno-hosted Gemini agent with four read-only tool views over the request's in-memory ResultSet/DiagnosticsBundle, transcript capture for audit, `telemetry=False`, no durable Agno state. Import-linter layers reordered to `engine_service → copilot_agent → reserving_engine` so engine_service may host the agent; engine_service config gains optional `GEMINI_API_KEY`/`GEMINI_MODEL_ID`. Provenance Gate, HTTP/Convex wiring, and Engine-Only Mode explicitly out of scope. Status → ready-for-dev. |
 | 2026-07-19 | 1.0     | Story 5.1 implemented: `copilot_agent` package — `tools.py` (four read-only closures over the frozen ResultSet/DiagnosticsBundle, camelCase-verbatim, no computation AD-1, Diagnostic IDs via `resolve_diagnostic`), `agent.py` (`build_gemini_model` sole provider seam with explicit `api_key=`, `build_interpretation_agent` `telemetry=False`/no-`db`, `run_interpretation`, `ModelNotConfiguredError`), `transcript.py` (pure `build_transcript` over Agno `RunOutput.messages`). `engine_service.config` gains optional `GEMINI_API_KEY`/`GEMINI_MODEL_ID`. Import-linter reordered to 3 downward layers. 23 new pytest (read-onlyness, correctness, provider-neutral schema, pure + stubbed-model tool-loop transcript). All gates green (pytest 242 passed/9 skipped; ruff; lint-imports 2 kept). Status → review. |
+
+### Review Findings
+
+_Code review 2026-07-19 (Epic 5 adversarial review, per-story parallel). Severity re-rated by triage._
+
+- [x] [Review][Patch] (low) AC-3 prompt-capture not pinned by a real-run test — the stubbed-model integration test asserts only tool/assistant roles; it never asserts the user prompt/system instructions appear in `result.transcript.messages`. A future Agno change to `RunOutput.messages` population could silently regress AC-3 and stay green. Add an assertion that the prompt is present in the captured transcript. [engine/tests/test_copilot_agent.py]

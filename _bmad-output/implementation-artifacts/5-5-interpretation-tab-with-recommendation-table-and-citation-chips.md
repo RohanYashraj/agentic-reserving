@@ -4,7 +4,7 @@ baseline_commit: c884600
 
 # Story 5.5: Interpretation Tab with Recommendation Table and Citation Chips
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -242,3 +242,12 @@ claude-opus-4-8[1m] (Claude Opus 4.8, 1M context) — BMad dev-story workflow.
 |---|---|
 | 2026-07-19 | Story 5.5 drafted (ready-for-dev): Interpretation tab — trigger, skeleton/"Reading diagnostics…"/failure states, per-Origin-Period recommendation table, CitationChip (hover-preview / click-to-Diagnostic via the 4.6 hash contract), context-rail "cited by N report claims", and the `run.interpretationTriggered` audit. Six scope decisions (D1–D6) documented. |
 | 2026-07-19 | Story 5.5 implemented (review): CitationChip / RecommendationTable / InterpretationTab + shared `resolveDiagnostic`; `getRecommendations` subscription + `generateRecommendations` trigger wired through page → RunDetail; rail "cited by N report claims" lit up; `run.interpretationTriggered` audit added (log-after-guard). Preview primitive = hand-rolled zero-dep (Task 3.3). Full suite green (355/355), tsc + eslint clean; no engine changes. Pre-existing `rederiveRun` fetch-count flaky verified against baseline. |
+
+### Review Findings
+
+_Code review 2026-07-19 (Epic 5 adversarial review, per-story parallel). Severity re-rated by triage._
+
+- [x] [Review][Patch] (medium) Repeat chip navigation to the same diagnostic silently fails — `navigate()` sets `window.location.hash = dxId`, and the D6 contract fires only on `hashchange`; assigning the current fragment does not dispatch `hashchange` (per HTML spec). Re-clicking the same chip after returning to the Interpretation tab, or after the context rail's "Clear" (which leaves `#dx:X` in the URL), is a no-op — the chip reads as dead on second activation. The D6 test masks this by manually dispatching a synthetic `HashChangeEvent`. Fix: force re-selection (reset hash first, or drive selection via state/callback rather than hash equality). [components/interpretation/CitationChip.tsx:64-68]
+- [x] [Review][Patch] (low) AC-1 panel header absent during the drafting/skeleton state — the "Drafted by the interpretation layer · every claim cites a diagnostic" header renders only inside `RecommendationTable`, which mounts only in the accepted state; AC-1's drafting scenario requires it during the skeleton. Render the header in the tab wrapper so it persists across states. [components/interpretation/InterpretationTab.tsx]
+- [x] [Review][Patch] (low) Post-success flicker back to the "Generate interpretation" ready state — between `setGenerating(false)` and the un-skipped `getRecommendations` subscription arriving, the accepted-branch guard fails and the ready state (primary button) briefly re-shows, inviting a double-trigger. Add a loading branch for `hasRecommendations && !recommendations`. [app/(app)/runs/[runId]/page.tsx:352-355]
+- [x] [Review][Defer] (low) Citation tooltip preview can be clipped by the table's `overflow-x-auto` — `overflow-x:auto` forces `overflow-y:auto`, so the `top-full` absolute preview can be clipped for chips near the last row / right edge. [components/interpretation/RecommendationTable.tsx:42] — deferred, layout hardening needs design input

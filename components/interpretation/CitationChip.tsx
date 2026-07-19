@@ -64,7 +64,18 @@ export function CitationChip({
   function navigate() {
     // Raw canonical id — RunDetail resolves via getElementById, never a CSS
     // selector (colons). Assigning to location.hash adds the leading '#'.
+    // Per the HTML spec, assigning location.hash the value it ALREADY holds does
+    // NOT dispatch `hashchange`. That makes a repeat click on the same chip — or
+    // a click after the rail's "Clear" left `#dx:X` in the URL — a silent no-op,
+    // since RunDetail's D6 selection effect fires only on `hashchange`. Detect
+    // the unchanged-hash case and re-fire the same signal the effect listens for
+    // so selection re-triggers; the first-navigation path still relies on the
+    // browser's own hashchange (no double-fire).
+    const alreadyThere = window.location.hash === `#${dxId}`;
     window.location.hash = dxId;
+    if (alreadyThere) {
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+    }
   }
 
   return (

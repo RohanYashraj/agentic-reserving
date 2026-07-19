@@ -121,8 +121,39 @@ describe("InterpretationTab state machine (Story 5.5, AC1/AC4, UX-DR16)", () => 
     expect(container.querySelector('[aria-live="polite"]')).not.toBeNull();
     // Skeleton shimmer present.
     expect(container.querySelectorAll(".animate-pulse").length).toBeGreaterThan(0);
+    // AC1 (F13): the panel header accompanies the drafting/skeleton state.
+    expect(
+      screen.getByText(
+        "Drafted by the interpretation layer · every claim cites a diagnostic",
+      ),
+    ).toBeDefined();
 
     resolve({ status: "accepted" });
+  });
+
+  it("F14: hasRecommendations flipped but recommendations not yet loaded → skeleton, NOT the Generate ready state", () => {
+    // The post-accept window: the subscription flipped hasRecommendations before
+    // getRecommendations un-skipped. The tab must show the drafting/skeleton UI
+    // (with the AC1 header) and must NOT flicker back to the primary trigger.
+    const { container } = render(
+      <InterpretationTab
+        run={makeRun({ hasRecommendations: true })}
+        recommendations={null}
+        diagnosticsBundle={makeDiagnosticsBundle()}
+        onGenerateInterpretation={vi.fn()}
+      />,
+    );
+    expect(container.querySelectorAll(".animate-pulse").length).toBeGreaterThan(0);
+    expect(screen.getByText(/Reading diagnostics…/i)).toBeDefined();
+    expect(
+      screen.getByText(
+        "Drafted by the interpretation layer · every claim cites a diagnostic",
+      ),
+    ).toBeDefined();
+    // No ready-state primary trigger during the load window (no double-trigger).
+    expect(
+      screen.queryByRole("button", { name: /Generate interpretation/i }),
+    ).toBeNull();
   });
 
   it("a rejected outcome shows the quiet failure copy", async () => {

@@ -18,6 +18,7 @@ from copilot_agent import ModelNotConfiguredError
 from engine_service.interpretation_errors import (
     CostCeilingExceededError,
     InterpretationTimeoutError,
+    ModelUnavailableError,
 )
 from reserving_engine import InvalidAprioriError, InvalidTriangleError, MissingAprioriError
 
@@ -89,6 +90,26 @@ def register_exception_handlers(app: FastAPI) -> None:
             503,
             "model_unavailable",
             "the interpretation model is not configured for this deployment",
+        )
+
+    @app.exception_handler(ModelUnavailableError)
+    async def _model_unavailable_runtime(
+        _request: Request, exc: ModelUnavailableError
+    ) -> JSONResponse:
+        # Story 5.6 review F16: a LIVE model-plane outage (not just misconfig)
+        # that persisted across the attempt budget. The SAME 503 `model_unavailable`
+        # code as _model_unavailable above, so callEngine surfaces
+        # `engine.model_unavailable` and Convex enters Engine-Only Mode on a real
+        # runtime outage. `details.attempts` carries the transcripts of the attempts
+        # that completed before the outage so those LLM interactions still reach the
+        # Audit Log (review F6); omitted when the model was down from the first call.
+        # The message never echoes prompt content or the api key (AD-12).
+        details = {"attempts": list(exc.attempts)} if exc.attempts else None
+        return _envelope(
+            503,
+            "model_unavailable",
+            "the interpretation model is currently unavailable",
+            details,
         )
 
     @app.exception_handler(CostCeilingExceededError)

@@ -348,6 +348,13 @@ def test_stubbed_model_run_executes_tool_and_captures_full_transcript(cl_bf_mack
     assert real_id in (call.result or "")
     roles = [m.role for m in result.transcript.messages]
     assert "tool" in roles and roles[-1] == "assistant"
+    # Review F1: AC-3 requires the transcript capture the PROMPT end-to-end (not
+    # just the tool/response tail). Pin the user prompt's presence so a future
+    # Agno change to RunOutput.messages population can't silently regress AC-3
+    # while the surrounding assertions stay green.
+    assert "user" in roles
+    contents = " ".join(m.content or "" for m in result.transcript.messages)
+    assert "Summarize the first A-vs-E diagnostic." in contents
 
 
 # --------------------------------------------------------------------------

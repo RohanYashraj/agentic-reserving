@@ -13,6 +13,7 @@ objects — no golden literals pinned.
 import json
 
 import pytest
+from agno.exceptions import ModelProviderError
 from agno.models.base import Model
 from agno.models.metrics import MessageMetrics
 from agno.models.response import ModelResponse
@@ -22,6 +23,7 @@ from copilot_agent.agent import ModelNotConfiguredError
 from engine_service.interpretation_errors import (
     CostCeilingExceededError,
     InterpretationTimeoutError,
+    ModelUnavailableError,
 )
 from engine_service.recommendations_flow import (
     RecommendationsAccepted,
@@ -79,6 +81,24 @@ class _ScriptedModel(Model):
 
     def _parse_provider_response_delta(self, response) -> ModelResponse:
         return response
+
+
+class _RaisingModel(_ScriptedModel):
+    """A model that fails like a LIVE Gemini outage (review F16): Agno funnels
+    every provider failure through ``ModelProviderError``. Returns the ``pre``
+    scripted outputs first (attempts that COMPLETE before the outage, review F6),
+    then raises on every subsequent call."""
+
+    def __init__(self, pre: list[str] | None = None) -> None:
+        super().__init__(pre or [])
+        self._pre = list(pre or [])
+
+    def invoke(self, *args, **kwargs) -> ModelResponse:
+        if self._i < len(self._pre):
+            return super().invoke(*args, **kwargs)
+        raise ModelProviderError(
+            message="gemini is down", model_name="scripted", model_id="x"
+        )
 
 
 def _origins(result_set):
@@ -357,3 +377,61 @@ def test_deterministic_under_fake_clock_and_scripted_model():
     assert isinstance(a, RecommendationsAccepted)
     assert isinstance(b, RecommendationsAccepted)
     assert a.recommendations.model_dump() == b.recommendations.model_dump()
+
+
+# --------------------------------------------------------------------------- #
+# Review F16 / F6: a live model outage fails closed into model_unavailable     #
+# --------------------------------------------------------------------------- #
+
+
+def test_live_model_outage_fails_closed_into_model_unavailable():
+    # F16: a runtime provider failure on every attempt is NOT a redraftable
+    # rejection — it raises ModelUnavailableError (→ 503 model_unavailable →
+    # Engine-Only Mode), not RecommendationsFailed.
+    result_set, bundle = _run()
+    with pytest.raises(ModelUnavailableError) as excinfo:
+        generate_recommendations(
+            _RaisingModel(), result_set, bundle, max_attempts=2
+        )
+    # Down from the first call → no completed attempts to carry.
+    assert excinfo.value.attempts == ()
+
+
+def test_outage_after_completed_attempt_preserves_transcripts_for_audit():
+    # F6: attempt 1 completes (gate-rejected, transcript captured); attempt 2 hits
+    # the outage. The fail-closed ModelUnavailableError carries attempt 1's
+    # transcript so that already-happened LLM interaction is still audit-logged.
+    result_set, bundle = _run()
+    origins = _origins(result_set)
+    dx_id = _real_dx(bundle)
+    bad = _draft_json(origins, dx_id, drop_first=True)  # missing coverage → rejected
+    with pytest.raises(ModelUnavailableError) as excinfo:
+        generate_recommendations(
+            _RaisingModel(pre=[bad]), result_set, bundle, max_attempts=2
+        )
+    assert len(excinfo.value.attempts) == 1
+    # The carried record is JSON-serializable (it rides in the 503 envelope).
+    (record,) = excinfo.value.attempts
+    assert "transcript" in record
+
+
+def test_duplicate_dx_citations_are_deduplicated():
+    # F8: a reason citing the same Diagnostic twice persists a single citation.
+    result_set, bundle = _run()
+    origins = _origins(result_set)
+    dx_id = _real_dx(bundle)
+    dx_ph = "{{" + dx_id + "}}"
+    recs = [
+        {
+            "origin": origin,
+            "method": "chain_ladder",
+            "reasons": [f"Recommended {dx_ph} and again {dx_ph}."],
+        }
+        for origin in origins
+    ]
+    output = json.dumps({"recommendations": recs})
+    outcome = generate_recommendations(_ScriptedModel([output]), result_set, bundle)
+    assert isinstance(outcome, RecommendationsAccepted)
+    for mrec in outcome.recommendations.recommendations:
+        for reason in mrec.reasons:
+            assert reason.citations == (dx_id,)

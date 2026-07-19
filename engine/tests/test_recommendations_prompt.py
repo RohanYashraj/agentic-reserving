@@ -69,10 +69,20 @@ def test_prompt_only_lists_executed_methods():
     result_set, bundle = _run(methods=("chain_ladder",))
     prompt = build_recommendation_prompt(result_set, bundle)
     assert "chain_ladder" in prompt
-    # A method that was NOT run must not be offered as a choice. (Only the
-    # unambiguous method name is asserted — "mack" is a substring of the
-    # always-present "mackStdErr" rs field, so it is not a clean signal.)
     assert "bornhuetter_ferguson" not in prompt
+    # Review F7: mackStdErr is a Mack-only rs field. On a Mack-less Run it must
+    # NOT be advertised (else the model writes {{rs:...:mackStdErr}}, which the
+    # gate rejects as unresolvable — burning a redraft attempt). With it dropped,
+    # "mack" no longer appears at all — a clean signal the un-run method is absent.
+    assert "mackStdErr" not in prompt
+    assert "mack" not in prompt
+
+
+def test_prompt_advertises_mackstderr_only_when_mack_ran():
+    # Review F7: the Mack-only field IS advertised when Mack executed.
+    result_set, bundle = _run(methods=("chain_ladder", "mack"))
+    prompt = build_recommendation_prompt(result_set, bundle)
+    assert "mackStdErr" in prompt
 
 
 # --------------------------------------------------------------------------- #

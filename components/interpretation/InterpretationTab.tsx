@@ -52,6 +52,36 @@ function SkeletonBar({ className }: { className?: string }) {
   );
 }
 
+/** The AC1 panel header — lifted here (out of RecommendationTable) so it
+ *  accompanies the recommendation panel across BOTH the drafting/skeleton and
+ *  accepted states. Quiet, labelled-not-decorated (EXPERIENCE.md:58) — the
+ *  middle-dot `·` wins over the mockup's em-dash. No sparkle/AI-persona chrome. */
+function PanelHeader() {
+  return (
+    <p className="text-sm text-muted-foreground">
+      Drafted by the interpretation layer · every claim cites a diagnostic
+    </p>
+  );
+}
+
+/** The drafting/skeleton panel — the header (AC1) plus a soft shimmer and the
+ *  aria-live "Reading diagnostics…" status. Shared by the local `generating`
+ *  flag and the post-accept window where `hasRecommendations` has flipped but
+ *  `getRecommendations` has not yet un-skipped (F14). */
+function DraftingPanel() {
+  return (
+    <div aria-live="polite" className="space-y-4">
+      <PanelHeader />
+      <p className="text-sm text-muted-foreground">Reading diagnostics…</p>
+      <div className="space-y-2">
+        <SkeletonBar className="h-8 w-full" />
+        <SkeletonBar className="h-8 w-full" />
+        <SkeletonBar className="h-8 w-5/6" />
+      </div>
+    </div>
+  );
+}
+
 /**
  * The interpretation trigger. When `engineOnly`, it renders DISABLED wrapped in a
  * tooltip (a disabled <button> swallows pointer events, so the trigger is a
@@ -158,29 +188,31 @@ export function InterpretationTab({
 
   // Accepted — driven off the SUBSCRIPTION (not the local flag) so the table
   // survives reload. A later accepted supersedes any prior durable failure.
-  // RecommendationTable carries the panel header (AC1).
+  // The panel header (AC1) is lifted here so it accompanies the table.
   if (run.hasRecommendations && recommendations && diagnosticsBundle) {
     return (
-      <RecommendationTable
-        recommendations={recommendations}
-        diagnosticsBundle={diagnosticsBundle}
-      />
+      <div className="space-y-4">
+        <PanelHeader />
+        <RecommendationTable
+          recommendations={recommendations}
+          diagnosticsBundle={diagnosticsBundle}
+        />
+      </div>
     );
+  }
+
+  // Post-accept loading window (F14): on a successful generate,
+  // `hasRecommendations` flips reactively BEFORE getRecommendations un-skips and
+  // loads. Show the drafting/skeleton UI (not the ready state) during that gap so
+  // the "Generate interpretation" primary never flickers back (no double-trigger).
+  if (run.hasRecommendations && !recommendations) {
+    return <DraftingPanel />;
   }
 
   // Pending — skeleton recommendation table + "Reading diagnostics…" in an
   // aria-live region. No token streaming, no attempt ticker (D2).
   if (generating) {
-    return (
-      <div aria-live="polite" className="space-y-4">
-        <p className="text-sm text-muted-foreground">Reading diagnostics…</p>
-        <div className="space-y-2">
-          <SkeletonBar className="h-8 w-full" />
-          <SkeletonBar className="h-8 w-full" />
-          <SkeletonBar className="h-8 w-5/6" />
-        </div>
-      </div>
-    );
+    return <DraftingPanel />;
   }
 
   // Story 5.6: the DURABLE fail-closed failed state — survives reload (unlike the

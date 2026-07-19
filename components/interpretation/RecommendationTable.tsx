@@ -20,9 +20,9 @@ import type {
 // ("a claim without a chip cannot exist on screen", EXPERIENCE.md:55).
 //
 // Pure presentational: props in, no data fetching, no Convex hooks. The panel
-// header (AC1) lives here — RecommendationTable IS the accepted-output panel, so
-// the InterpretationTab composes header + table by rendering this component (one
-// header, no duplication).
+// header (AC1) is lifted to InterpretationTab so it accompanies the panel across
+// BOTH the drafting/skeleton and accepted states (not just here) — this
+// component renders the table only, with no header of its own (no duplication).
 
 export function RecommendationTable({
   recommendations,
@@ -33,12 +33,6 @@ export function RecommendationTable({
 }) {
   return (
     <div className="space-y-4">
-      {/* Quiet, labelled-not-decorated header (EXPERIENCE.md:58) — middle-dot `·`
-          wins over the mockup's em-dash. No sparkle/AI-persona chrome. */}
-      <p className="text-sm text-muted-foreground">
-        Drafted by the interpretation layer · every claim cites a diagnostic
-      </p>
-
       <div className="overflow-x-auto">
         <table className="w-full border-collapse text-sm">
           <caption className="sr-only">

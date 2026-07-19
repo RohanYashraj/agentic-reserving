@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CitationChip } from "@/components/interpretation/CitationChip";
 import type { DiagnosticsBundle } from "@/convex/lib/engineContract";
@@ -65,6 +65,20 @@ describe("CitationChip (Story 5.5, AC2, UX-DR2)", () => {
     render(<CitationChip dxId={dxId} diagnosticsBundle={bundle} />);
     fireEvent.keyDown(screen.getByRole("link"), { key: "Enter" });
     expect(window.location.hash).toBe(`#${dxId}`);
+  });
+
+  it("F12: re-clicking the same chip (hash unchanged) still fires hashchange", () => {
+    // Pre-seed the hash to the chip's target so assigning it again is a no-op per
+    // the HTML spec (no native hashchange). The chip must re-fire the event
+    // itself so RunDetail's D6 selection effect re-triggers.
+    window.location.hash = dxId;
+    const onHashChange = vi.fn();
+    window.addEventListener("hashchange", onHashChange);
+    render(<CitationChip dxId={dxId} diagnosticsBundle={bundle} />);
+    fireEvent.click(screen.getByRole("link"));
+    expect(window.location.hash).toBe(`#${dxId}`);
+    expect(onHashChange).toHaveBeenCalledTimes(1);
+    window.removeEventListener("hashchange", onHashChange);
   });
 
   it("Space previews without navigating (hash unchanged, preview shown)", () => {

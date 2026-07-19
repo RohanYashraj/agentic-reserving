@@ -83,9 +83,16 @@ _NUMBER_RE = re.compile(r"-?\d{1,3}(?:,\d{3})+(?:\.\d+)?%?|-?\d+(?:\.\d+)?%?")
 _STRUCTURAL_WHITELIST = (
     re.compile(r"\b\d{4}-\d{2}-\d{2}\b"),  # ISO-8601 date
     re.compile(r"\b(?:19|20)\d{2}\b"),  # four-digit year / origin-year label
-    # heading / list ordinal at a line start: "2.", "2.4", "## 3." — requires
-    # trailing punctuation or sub-numbering so a leading figure is NOT exempted
-    re.compile(r"(?m)^[#>\s*+-]*(?:\d+(?:\.\d+)+|\d+[.)])(?=\s|$)"),
+    # heading / list ordinal at a line start: "2.", "2.4", "## 3.", "1.2.3".
+    # Review F3: EACH numeric segment is bounded to 1–2 digits so a genuine
+    # figure at a line start is NOT masked before the numeric scan. Without the
+    # bound, "18834.50 is our reserve." matched `\d+(?:\.\d+)+` and "999999. The
+    # reserve…" matched `\d+[.)]`, so a fabricated figure at a paragraph/bullet
+    # start was silently exempted from BOTH the source-value and uncited-claim
+    # checks (a gate bypass, AD-5). Section/list numbers are small; a reserve
+    # figure is large and/or grouped (grouped forms start with `\d+,` and never
+    # matched here anyway), so the ≤2-digit bound separates them.
+    re.compile(r"(?m)^[#>\s*+-]*(?:\d{1,2}(?:\.\d{1,2})+|\d{1,2}[.)])(?=\s|$)"),
 )
 
 

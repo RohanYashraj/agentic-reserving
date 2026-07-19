@@ -51,7 +51,9 @@ function makeRecommendations(origins: string[] = ["2018", "2019"]): Recommendati
 }
 
 describe("RecommendationTable (Story 5.5, AC1/AC2)", () => {
-  it("renders the quiet panel header with the middle-dot", () => {
+  it("does not render the panel header itself (lifted to InterpretationTab, F13)", () => {
+    // The AC1 header now lives in InterpretationTab so it accompanies the panel
+    // across the drafting and accepted states; the table renders only the table.
     render(
       <RecommendationTable
         recommendations={makeRecommendations()}
@@ -59,10 +61,10 @@ describe("RecommendationTable (Story 5.5, AC1/AC2)", () => {
       />,
     );
     expect(
-      screen.getByText(
+      screen.queryByText(
         "Drafted by the interpretation layer · every claim cites a diagnostic",
       ),
-    ).toBeDefined();
+    ).toBeNull();
   });
 
   it("renders one row per Origin Period with the methodLabel", () => {

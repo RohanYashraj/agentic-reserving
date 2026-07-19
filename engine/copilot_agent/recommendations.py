@@ -85,7 +85,14 @@ def build_recommendation_prompt(
     executed_methods = [m.method for m in result_set.method_results]
     origins = [o.origin for o in result_set.method_results[0].origin_results]
     methods_list = " | ".join(executed_methods)
-    rs_fields = " | ".join(_RS_FIELDS)
+    # Review F7: `mackStdErr` only exists when Mack ran. Advertising it on a
+    # Mack-less Run invites `{{rs:...:mackStdErr}}`, which the gate rejects as
+    # `unresolvable_rs_placeholder` — burning a redraft attempt toward
+    # exhaustion. Drop it from the advertised fields unless Mack executed.
+    advertised_fields = [
+        f for f in _RS_FIELDS if f != "mackStdErr" or "mack" in executed_methods
+    ]
+    rs_fields = " | ".join(advertised_fields)
 
     return "\n".join(
         [

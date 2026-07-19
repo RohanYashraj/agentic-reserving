@@ -38,11 +38,13 @@ from pydantic import BaseModel
 
 from copilot_agent import (
     DraftParseError,
+    ModelCallError,
     build_interpretation_agent,
     build_report_prompt,
     parse_report_draft,
     run_interpretation,
 )
+from engine_service.interpretation_errors import ModelUnavailableError
 from engine_service.provenance_gate import GateRejected, run_provenance_gate
 from engine_service.recommendations_flow import (
     DEFAULT_TIMEOUT_SECONDS,
@@ -228,6 +230,7 @@ def generate_reserve_report(
     prior_rejections: tuple[AttemptRejection, ...] = ()
     deadline = now() + timeout_seconds
     cumulative_tokens = 0
+    last_model_error: ModelCallError | None = None
 
     for _ in range(max_attempts):
         # Fail-closed budget guard BEFORE spending a model turn (AD-9).
@@ -240,9 +243,17 @@ def generate_reserve_report(
         if prior_rejections:
             prompt = f"{prompt}\n\n{_report_feedback(prior_rejections)}"
 
-        # Model-plane errors propagate to the caller (AD-9 fail-closed); they are
-        # NOT swallowed as a redraftable rejection.
-        result = run_interpretation(agent, prompt)
+        # A LIVE model-plane failure (review F16) is NOT a redraftable rejection.
+        # Retry within the attempt + time budget; a persistent outage exits the
+        # loop and fails closed into model_unavailable below, carrying every
+        # completed attempt's transcript for audit (review F6).
+        try:
+            result = run_interpretation(agent, prompt)
+        except ModelCallError as exc:
+            last_model_error = exc
+            prior_rejections = ()
+            continue
+        last_model_error = None
         cumulative_tokens += result.token_count
 
         candidate, rejections = _evaluate_attempt(
@@ -258,6 +269,18 @@ def generate_reserve_report(
             assert candidate is not None
             return ReserveReportAccepted(report=candidate, attempts=tuple(attempts))
         prior_rejections = rejections
+
+    # A live model outage was the terminal condition (review F16): fail closed
+    # into model_unavailable → Engine-Only Mode, carrying every completed
+    # attempt's transcript for audit (review F6), before the budget re-check.
+    if last_model_error is not None:
+        raise ModelUnavailableError(
+            f"the interpretation model was unavailable across {max_attempts} "
+            "attempt(s)",
+            attempts=tuple(
+                a.model_dump(mode="json", by_alias=True) for a in attempts
+            ),
+        )
 
     # Exhausted the attempt budget with no clean draft. Re-check the budget so a
     # timeout / over-ceiling condition fails closed (503) rather than a plain
