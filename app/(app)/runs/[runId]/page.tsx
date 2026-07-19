@@ -46,10 +46,31 @@ export default function RunDetailPage() {
     api.runs.getDiagnosticsBundle,
     orgId && run?.hasDiagnostics ? { workspaceId: orgId, runId } : "skip",
   );
+  // Fourth subscription (Story 5.5): the accepted Recommendations document — the
+  // DURABLE interpretation state (AC4). Gated on hasRecommendations so nothing is
+  // fetched before an accepted interpretation exists; when storeRecommendations
+  // patches runs.recommendations the boolean flips and the table populates
+  // reactively (FR-20, no polling), surviving reload.
+  const recommendations = useQuery(
+    api.runs.getRecommendations,
+    orgId && run?.hasRecommendations ? { workspaceId: orgId, runId } : "skip",
+  );
+  // Fifth subscription (Story 5.6): the workspace-global Engine-Only Mode. The
+  // banner subscribes to the same query in the app shell; Convex dedupes the two
+  // subscriptions, so this run-scoped mirror adds no extra server cost. It
+  // disables the Interpretation trigger while the mode holds (AC-3).
+  const mode = useQuery(
+    api.interpretationMode.getInterpretationMode,
+    orgId ? { workspaceId: orgId } : "skip",
+  );
   const retryRun = useMutation(api.runs.retryRun);
   // Story 4.7: re-derivation is an action (it fetches the engine). It returns
   // the ReDerivationReport to RunDetail, which holds it in local state.
   const rederiveRun = useAction(api.runs.rederiveRun);
+  // Story 5.5: trigger interpretation. An action (it fetches the engine); its
+  // pending state drives the transient "Reading diagnostics…". The durable
+  // outcome is the getRecommendations subscription above.
+  const generateRecommendations = useAction(api.runs.generateRecommendations);
 
   const [retryError, setRetryError] = useState<string | null>(null);
 
@@ -69,6 +90,18 @@ export default function RunDetailPage() {
       return await rederiveRun({ workspaceId: orgId, runId });
     } catch (err) {
       // Surface a readable message; RunDetail renders it in the panel.
+      throw new Error(errorMessage(err));
+    }
+  }
+
+  async function onGenerateInterpretation() {
+    if (!orgId) throw new Error("No active Workspace.");
+    try {
+      // Returns { status: "accepted" | "rejected" }; a rejected outcome is a
+      // clean value the tab renders as the quiet failure. model_unavailable /
+      // transient errors throw and surface inline (the Engine-Only banner is 5.6).
+      return await generateRecommendations({ workspaceId: orgId, runId });
+    } catch (err) {
       throw new Error(errorMessage(err));
     }
   }
@@ -106,8 +139,11 @@ export default function RunDetailPage() {
               run={run}
               resultSet={resultSet ?? null}
               diagnosticsBundle={diagnosticsBundle ?? null}
+              recommendations={recommendations ?? null}
+              engineOnly={mode?.engineOnly ?? false}
               onRetry={onRetry}
               onRederive={onRederive}
+              onGenerateInterpretation={onGenerateInterpretation}
             />
           </div>
         </>

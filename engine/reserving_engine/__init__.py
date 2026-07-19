@@ -23,10 +23,23 @@ from reserving_engine.methods import (
     MissingAprioriError,
     run_methods,
 )
+from reserving_engine.recommendations import (
+    MethodRecommendation,
+    RecommendationReason,
+    RecommendationRejection,
+    Recommendations,
+    validate_recommendations,
+)
 from reserving_engine.rederivation import (
     Discrepancy,
     ReDerivationReport,
     rederive,
+)
+from reserving_engine.reserve_report import (
+    ReserveReport,
+    ReserveReportRejection,
+    ReserveReportSection,
+    validate_reserve_report,
 )
 from reserving_engine.resultset import (
     AprioriLossRatio,
@@ -62,11 +75,18 @@ __all__ = [
     "LdfStabilityElement",
     "Lineage",
     "LinkRatio",
+    "MethodRecommendation",
     "MethodResult",
     "MissingAprioriError",
     "OriginResult",
     "ReDerivationReport",
+    "RecommendationReason",
+    "RecommendationRejection",
+    "Recommendations",
     "ResidualElement",
+    "ReserveReport",
+    "ReserveReportRejection",
+    "ReserveReportSection",
     "ResultSet",
     "RunParameters",
     "Triangle",
@@ -79,6 +99,8 @@ __all__ = [
     "rederive",
     "resolve_diagnostic",
     "run_methods",
+    "validate_recommendations",
+    "validate_reserve_report",
     "triangle_hash",
     "validate_triangle",
 ]

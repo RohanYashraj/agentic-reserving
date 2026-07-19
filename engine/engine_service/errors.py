@@ -14,6 +14,12 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from copilot_agent import ModelNotConfiguredError
+from engine_service.interpretation_errors import (
+    CostCeilingExceededError,
+    InterpretationTimeoutError,
+    ModelUnavailableError,
+)
 from reserving_engine import InvalidAprioriError, InvalidTriangleError, MissingAprioriError
 
 
@@ -72,6 +78,63 @@ def register_exception_handlers(app: FastAPI) -> None:
             "invalid_apriori",
             str(exc),
             {"origins": list(exc.origins)},
+        )
+
+    @app.exception_handler(ModelNotConfiguredError)
+    async def _model_unavailable(_request: Request, _exc: ModelNotConfiguredError) -> JSONResponse:
+        # Story 5.3 (AD-9): the interpretation model is not configured. A stable
+        # `model_unavailable` (503) so callEngine surfaces `engine.model_unavailable`
+        # — the typed signal Story 5.6 keys Engine-Only Mode on. The key is never
+        # echoed. Not a bug (no 500): a deliberate fail-closed outcome.
+        return _envelope(
+            503,
+            "model_unavailable",
+            "the interpretation model is not configured for this deployment",
+        )
+
+    @app.exception_handler(ModelUnavailableError)
+    async def _model_unavailable_runtime(
+        _request: Request, exc: ModelUnavailableError
+    ) -> JSONResponse:
+        # Story 5.6 review F16: a LIVE model-plane outage (not just misconfig)
+        # that persisted across the attempt budget. The SAME 503 `model_unavailable`
+        # code as _model_unavailable above, so callEngine surfaces
+        # `engine.model_unavailable` and Convex enters Engine-Only Mode on a real
+        # runtime outage. `details.attempts` carries the transcripts of the attempts
+        # that completed before the outage so those LLM interactions still reach the
+        # Audit Log (review F6); omitted when the model was down from the first call.
+        # The message never echoes prompt content or the api key (AD-12).
+        details = {"attempts": list(exc.attempts)} if exc.attempts else None
+        return _envelope(
+            503,
+            "model_unavailable",
+            "the interpretation model is currently unavailable",
+            details,
+        )
+
+    @app.exception_handler(CostCeilingExceededError)
+    async def _cost_ceiling(_request: Request, _exc: CostCeilingExceededError) -> JSONResponse:
+        # Story 5.6 (AD-9): the Run crossed its per-Run interpretation token
+        # ceiling. A fail-closed 503 (like model_unavailable) so callEngine
+        # surfaces `engine.cost_ceiling_exceeded` — the per-Run clean failure
+        # Story 5.6 records on the run record. Not a bug (no 500): a deliberate
+        # ceiling outcome. No details echo prompt content or the api key.
+        return _envelope(
+            503,
+            "cost_ceiling_exceeded",
+            "the interpretation reached the per-Run token/cost ceiling",
+        )
+
+    @app.exception_handler(InterpretationTimeoutError)
+    async def _interpretation_timeout(_request: Request, _exc: InterpretationTimeoutError) -> JSONResponse:
+        # Story 5.6 (AD-9, NFR-7): the interpretation exceeded its per-Run time
+        # limit. A fail-closed 503 so callEngine surfaces
+        # `engine.interpretation_timeout` — the per-Run clean failure Story 5.6
+        # records on the run record. A deliberate timeout outcome, not a 500 bug.
+        return _envelope(
+            503,
+            "interpretation_timeout",
+            "the interpretation exceeded the per-Run time limit",
         )
 
     @app.exception_handler(RequestValidationError)

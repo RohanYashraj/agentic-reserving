@@ -46,9 +46,13 @@ root_packages = ["reserving_engine", "engine_service", "copilot_agent"]
 include_external_packages = true
 
 [[tool.importlinter.contracts]]
-name = "Downward-only layering: shells import the core, never the reverse"
+name = "Downward-only layering: engine_service -> copilot_agent -> reserving_engine"
 type = "layers"
-layers = ["engine_service | copilot_agent", "reserving_engine"]
+# engine_service HOSTS copilot_agent (spine SVC --> AGENT, AD-8): so the two
+# shells are NOT independent peers — engine_service is the higher layer and may
+# import copilot_agent, copilot_agent imports only the pure core beneath it, and
+# reserving_engine imports neither. Strictly downward, exactly the spine graph.
+layers = ["engine_service", "copilot_agent", "reserving_engine"]
 
 [[tool.importlinter.contracts]]
 name = "reserving_engine purity (AD-2): no I/O-capable modules"

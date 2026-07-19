@@ -5,7 +5,7 @@ import { v } from "convex/values";
 import { appendAuditEntryInTransaction } from "./auditLogs";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import type { MutationCtx } from "./_generated/server";
+import type { ActionCtx, MutationCtx } from "./_generated/server";
 import {
   action,
   internalAction,
@@ -18,11 +18,15 @@ import { callEngine } from "./lib/engineClient";
 import type {
   DiagnosticsBundle,
   ReDerivationReport,
+  Recommendations,
+  ReserveReport,
   ResultSet,
 } from "./lib/engineContract";
 import {
   diagnosticsBundleValidator,
   reDerivationReportValidator,
+  recommendationsValidator,
+  reserveReportValidator,
   resultSetValidator,
   runParametersValidator,
 } from "./lib/engineContract";
@@ -473,6 +477,14 @@ export const getRun = query({
     await requireMember(ctx, workspaceId);
     const run = await ctx.db.get(runId);
     if (run === null || run.workspaceId !== workspaceId) return null;
+    // Story 5.4: one indexed `by_run` read → a boolean gating the Epic-6 Report
+    // tab, exactly like hasResults/hasDiagnostics/hasRecommendations. The report
+    // lives in its own table (not inline), so this is a lookup, not a field
+    // check; it leaks NO figures and keeps getRun lean.
+    const reserveReport = await ctx.db
+      .query("reserveReports")
+      .withIndex("by_run", (q) => q.eq("runId", runId))
+      .unique();
     return {
       _id: run._id,
       status: run.status, // queued | running | complete | failed
@@ -488,6 +500,15 @@ export const getRun = query({
       // any figures (AD-1) — the figures arrive in 4.4–4.6.
       hasResults: run.resultSet !== undefined,
       hasDiagnostics: run.diagnosticsBundle !== undefined,
+      // Story 5.3: gates the 5.5 Interpretation tab exactly like hasResults/
+      // hasDiagnostics gate Results/Diagnostics — a boolean, NO figures leak.
+      hasRecommendations: run.recommendations !== undefined,
+      // Story 5.4: gates the Epic-6 Report tab — a boolean, NO figures leak.
+      hasReserveReport: reserveReport !== null,
+      // Story 5.6: the durable per-Run interpretation-failure state (reason +
+      // timestamp) so the Interpretation tab renders it after reload (D2). Lean
+      // — the reason enum + `at` only, NO figures.
+      interpretationFailure: run.interpretationFailure ?? null,
     };
   },
 });
@@ -541,6 +562,30 @@ export const getDiagnosticsBundle = query({
     const run = await ctx.db.get(runId);
     if (run === null || run.workspaceId !== workspaceId) return null;
     return run.diagnosticsBundle ?? null;
+  },
+});
+
+/**
+ * The stored Recommendations document for one Run, verbatim (Story 5.3, FR-10)
+ * — the interpretation read surface the 5.5 Interpretation tab subscribes to
+ * ONLY when `hasRecommendations` (getRun's boolean gate). The structural twin
+ * of `getResultSet`/`getDiagnosticsBundle`.
+ *
+ * Public → requireMember first (AD-4); then the same tenancy re-check returns
+ * `null` for a row outside this Workspace (existence never leaks). Returns
+ * `run.recommendations` UNCHANGED — no projection; 5.5 renders it (CitationChip
+ * off `reasons[].citations`). A Run with no accepted interpretation → `null`.
+ *
+ * AD-1: this query only READS and RETURNS the machine-drafted document (whose
+ * figures are already gate-rendered from the ResultSet); it computes nothing.
+ */
+export const getRecommendations = query({
+  args: { workspaceId: v.string(), runId: v.id("runs") },
+  handler: async (ctx, { workspaceId, runId }) => {
+    await requireMember(ctx, workspaceId);
+    const run = await ctx.db.get(runId);
+    if (run === null || run.workspaceId !== workspaceId) return null;
+    return run.recommendations ?? null;
   },
 });
 
@@ -784,5 +829,693 @@ export const rederiveRun = action({
     });
 
     return report;
+  },
+});
+
+// --- Story 5.3: Method Recommendations Through the Gate (FR-10, AD-5, AD-9) ---
+
+/** The engine `/recommendations` response wire shape (discriminated result,
+ * transcripts in every arm — FR-15). `attempts` rides as opaque JSON to the
+ * audit payload; only the `accepted` document is a drift-checked contract. */
+type RecommendResponse = {
+  status: "accepted" | "rejected";
+  recommendations: Recommendations | null;
+  attempts: unknown;
+  rejectionSummary: string | null;
+};
+
+/**
+ * Ingredients for interpretation: the run's stored ResultSet + DiagnosticsBundle
+ * (passed DOWN into the engine — engine_service is stateless, AD-3). Internal
+ * (the trusted `generateRecommendations` action is the only caller), BUT it
+ * re-checks tenancy anyway (same RUN_NOT_FOUND for wrong-workspace/absent, so
+ * existence never leaks) because the action passes an attacker-controllable
+ * runId. Only a `complete` run carries both artifacts — otherwise
+ * RUN_NOT_INTERPRETABLE (interpretation needs a completed Run's results +
+ * diagnostics). Mirrors `getRunForRederive`.
+ */
+export const getRunForRecommend = internalQuery({
+  args: { runId: v.id("runs"), workspaceId: v.string() },
+  handler: async (ctx, { runId, workspaceId }) => {
+    const run = await ctx.db.get(runId);
+    if (run === null || run.workspaceId !== workspaceId) {
+      throw new ConvexError({
+        code: "RUN_NOT_FOUND",
+        message: "That Run does not exist in this Workspace.",
+      });
+    }
+    if (
+      run.status !== "complete" ||
+      run.resultSet === undefined ||
+      run.diagnosticsBundle === undefined
+    ) {
+      throw new ConvexError({
+        code: "RUN_NOT_INTERPRETABLE",
+        message:
+          "Only a completed Run with stored results and diagnostics can be interpreted.",
+      });
+    }
+    return { resultSet: run.resultSet, diagnosticsBundle: run.diagnosticsBundle };
+  },
+});
+
+/**
+ * Persist the accepted Recommendations document on the run row + audit the
+ * transcript (Story 5.3, FR-10/FR-15). THE schema gate is the typed
+ * `recommendations` arg (`recommendationsValidator`): a schema-invalid document
+ * THROWS at the boundary and is never stored (AD-10). Guarded on
+ * `status === "complete"` and matching workspace (no-op on a vanished /
+ * cross-tenant run). Chain of custody: the document's `runId` must match the run
+ * (like storeResultSet's hash check). Mirrors `storeResultSet`.
+ *
+ * The audit payload carries the transcript(s) — the full LLM interaction (FR-15,
+ * AD-6) — but NO reserve figures (AD-1/leanness; the recommendations live on the
+ * row). `payload` is `v.any()`, so the transcript fits.
+ */
+export const storeRecommendations = internalMutation({
+  args: {
+    runId: v.id("runs"),
+    workspaceId: v.string(),
+    actor: v.string(),
+    recommendations: recommendationsValidator,
+    transcript: v.any(),
+  },
+  handler: async (ctx, { runId, workspaceId, actor, recommendations, transcript }) => {
+    const run = await ctx.db.get(runId);
+    if (run === null || run.workspaceId !== workspaceId || run.status !== "complete") {
+      return;
+    }
+    // Chain of custody (AD-7): the accepted document's correlation key must be
+    // this Run's id — a mismatch means a cross-Run document; never store it.
+    if (recommendations.runId !== (runId as string)) {
+      throw new ConvexError({
+        code: "RECOMMENDATIONS_RUN_MISMATCH",
+        message: "The recommendations document's runId does not match the Run.",
+      });
+    }
+    await ctx.db.patch(runId, { recommendations });
+    await appendAuditEntryInTransaction(ctx, {
+      workspaceId,
+      actor,
+      eventType: "run.recommended",
+      runId,
+      payload: {
+        runId,
+        transcript,
+        // One recommendation per Origin Period — the true Origin count.
+        originCount: recommendations.recommendations.length,
+      },
+    });
+  },
+});
+
+/**
+ * Record a FAILED Interpretation (gate/structural exhaustion) — append a
+ * `run.interpretationRejected` audit entry carrying the transcript + rejections
+ * (AD-5/FR-11 "the rejection with reasons is audit-logged"). Persists NO
+ * recommendations (AC-2 never-partial). Guarded so a vanished / cross-tenant run
+ * no-ops. Single audit writer via `appendAuditEntryInTransaction`.
+ */
+export const recordInterpretationRejection = internalMutation({
+  args: {
+    runId: v.id("runs"),
+    workspaceId: v.string(),
+    actor: v.string(),
+    transcript: v.any(),
+    rejections: v.any(),
+  },
+  handler: async (ctx, { runId, workspaceId, actor, transcript, rejections }) => {
+    const run = await ctx.db.get(runId);
+    if (run === null || run.workspaceId !== workspaceId) return;
+    await appendAuditEntryInTransaction(ctx, {
+      workspaceId,
+      actor,
+      eventType: "run.interpretationRejected",
+      runId,
+      payload: { runId, transcript, rejections },
+    });
+  },
+});
+
+/**
+ * Record a FAIL-CLOSED Interpretation attempt (Story 5.6, AD-9). Distinct from
+ * `run.interpretationRejected` (a GATE rejection of a draft the model DID
+ * produce): `run.interpretationFailed` is the model/cost/timeout fail-closed —
+ * the attempt could not run or complete. Patches the durable per-Run
+ * `runs.interpretationFailure` (survives reload, D2) and audit-logs the failure
+ * (single writer). Guarded so a vanished / cross-tenant run no-ops. This does
+ * NOT touch `runs.status` (the AD-7 enum is unchanged) nor the workspace-global
+ * mode (that is `transitionEngineOnlyMode`'s job, wired in the action — D1).
+ * Lean payload — the reason + runId, NO figures (AD-1).
+ */
+export const recordInterpretationFailed = internalMutation({
+  args: {
+    runId: v.id("runs"),
+    workspaceId: v.string(),
+    actor: v.string(),
+    reason: v.union(
+      v.literal("model_unavailable"),
+      v.literal("cost_ceiling_exceeded"),
+      v.literal("interpretation_timeout"),
+    ),
+    // Story 5.6 review F6: on a model outage, the transcripts of the attempts
+    // that COMPLETED before the outage ride here (from the engine's
+    // model_unavailable envelope details) so those LLM interactions are still
+    // audit-logged (AD-6/FR-15). Opaque JSON — audit payload only; the durable
+    // `interpretationFailure` stays lean (reason + at).
+    attempts: v.optional(v.any()),
+  },
+  handler: async (ctx, { runId, workspaceId, actor, reason, attempts }) => {
+    const run = await ctx.db.get(runId);
+    if (run === null || run.workspaceId !== workspaceId) return;
+    await ctx.db.patch(runId, {
+      interpretationFailure: { reason, at: Date.now() },
+    });
+    await appendAuditEntryInTransaction(ctx, {
+      workspaceId,
+      actor,
+      eventType: "run.interpretationFailed",
+      runId,
+      payload: {
+        runId,
+        reason,
+        ...(attempts !== undefined ? { attempts } : {}),
+      },
+    });
+  },
+});
+
+/**
+ * Record the TRIGGERING of an Interpretation — append a `run.interpretationTriggered`
+ * audit entry (Story 5.5, AD-6/FR-15). Completion (`run.recommended`) and failure
+ * (`run.interpretationRejected`) were already audited (5.3); this fills the missing
+ * third leg so all of triggering/completion/failure are logged. Mirrors
+ * `recordInterpretationRejection`'s shape: guarded so a vanished / cross-tenant run
+ * no-ops (defence-in-depth — the action only calls this after `getRunForRecommend`
+ * has passed the tenancy check). Single audit writer via
+ * `appendAuditEntryInTransaction`. Lean payload — records intent, NO figures.
+ */
+export const recordInterpretationTriggered = internalMutation({
+  args: {
+    runId: v.id("runs"),
+    workspaceId: v.string(),
+    actor: v.string(),
+  },
+  handler: async (ctx, { runId, workspaceId, actor }) => {
+    const run = await ctx.db.get(runId);
+    if (run === null || run.workspaceId !== workspaceId) return;
+    await appendAuditEntryInTransaction(ctx, {
+      workspaceId,
+      actor,
+      eventType: "run.interpretationTriggered",
+      runId,
+      payload: { runId },
+    });
+  },
+});
+
+/**
+ * Story 5.6 (AD-9, D1): map a fail-closed engine error from an interpretation
+ * callEngine into durable per-Run state (+ the workspace-global Engine-Only Mode
+ * on model outage), shared by `generateRecommendations` and `generateReserveReport`.
+ * Does NOT re-throw — the caller re-throws so its inline error surface still
+ * shows (5.5). Only the three fail-closed engine codes leave durable state;
+ * transient `ENGINE_UNAVAILABLE`/`ENGINE_UNCONFIGURED` (and anything else) leave
+ * NOTHING (matches 5.5's retry surface). `model_unavailable` is the ONLY code
+ * that flips the global mode (D1 — a per-Run cost/timeout breach does not, to
+ * avoid a semantically-wrong global "interpretation unavailable" + a recovery
+ * deadlock).
+ */
+async function recordInterpretationFailureFromError(
+  ctx: ActionCtx,
+  {
+    err,
+    runId,
+    workspaceId,
+    actor,
+  }: { err: unknown; runId: Id<"runs">; workspaceId: string; actor: string },
+): Promise<void> {
+  const data =
+    err instanceof ConvexError
+      ? (err.data as { code?: string; details?: { attempts?: unknown } })
+      : undefined;
+  const code = data?.code;
+  if (code === "engine.model_unavailable") {
+    await ctx.runMutation(internal.runs.recordInterpretationFailed, {
+      runId,
+      workspaceId,
+      actor,
+      reason: "model_unavailable",
+      // Review F6: audit the completed attempts' transcripts carried in the
+      // 503 envelope (undefined for a misconfig/from-first-call outage).
+      attempts: data?.details?.attempts,
+    });
+    // Model plane down → enter the workspace-global Engine-Only Mode (D1).
+    await ctx.runMutation(internal.interpretationMode.transitionEngineOnlyMode, {
+      workspaceId,
+      engineOnly: true,
+      actor,
+      reason: "model_unavailable",
+      runId,
+    });
+  } else if (code === "engine.cost_ceiling_exceeded") {
+    await ctx.runMutation(internal.runs.recordInterpretationFailed, {
+      runId,
+      workspaceId,
+      actor,
+      reason: "cost_ceiling_exceeded",
+    });
+  } else if (code === "engine.interpretation_timeout") {
+    await ctx.runMutation(internal.runs.recordInterpretationFailed, {
+      runId,
+      workspaceId,
+      actor,
+      reason: "interpretation_timeout",
+    });
+  }
+  // Any other error (transient / unexpected) leaves NO durable state.
+}
+
+/**
+ * Clear the workspace-global Engine-Only Mode on a reachable interpretation call
+ * (D3 self-heal). Idempotent (D4) — a no-op when already not-Engine-Only, so the
+ * happy path adds one cheap read. Shared by both interpretation actions.
+ */
+async function clearEngineOnlyModeOnSuccess(
+  ctx: ActionCtx,
+  { runId, workspaceId, actor }: { runId: Id<"runs">; workspaceId: string; actor: string },
+): Promise<void> {
+  await ctx.runMutation(internal.interpretationMode.transitionEngineOnlyMode, {
+    workspaceId,
+    engineOnly: false,
+    actor,
+    runId,
+  });
+}
+
+/**
+ * Generate per-Origin-Period Method recommendations through the Provenance Gate
+ * (Story 5.3, FR-10, AD-5). A public ACTION (it must `fetch` the engine):
+ * `requireMember` is its FIRST statement (AD-4), BEFORE the engine call, so an
+ * unauthenticated / non-member caller is rejected without reaching the model
+ * plane. **`requireMember`, not `requireRole`** — machine-drafting recommendations
+ * is not a privileged product-state approval; the Senior-Actuary override is
+ * Epic 6 (mirrors `rederiveRun`'s member-vs-role decision).
+ *
+ * The bounded redraft loop lives server-side in the engine (one HTTP call — see
+ * the story Dev Notes on why the loop is in engine_service, not here). This
+ * action is the thin persist+audit tail: fetch → callEngine → branch on the
+ * discriminated result. Re-running simply overwrites `runs.recommendations` with
+ * the fresh machine-drafted document (Epic 6 human overrides don't exist yet, so
+ * nothing human-owned is clobbered); it adds NO run-status value (5.3 §Scope).
+ */
+export const generateRecommendations = action({
+  args: { workspaceId: v.string(), runId: v.id("runs") },
+  returns: v.object({ status: v.union(v.literal("accepted"), v.literal("rejected")) }),
+  handler: async (
+    ctx,
+    { workspaceId, runId },
+  ): Promise<{ status: "accepted" | "rejected" }> => {
+    // AD-4: identity + Workspace membership before anything else (before fetch).
+    const { identity } = await requireMember(ctx, workspaceId);
+    const actor = identity.subject;
+
+    // Tenancy re-check happens inside getRunForRecommend (runId is
+    // attacker-controllable); it throws RUN_NOT_FOUND for wrong-workspace/absent
+    // and RUN_NOT_INTERPRETABLE for a Run without results + diagnostics.
+    const { resultSet, diagnosticsBundle } = await ctx.runQuery(
+      internal.runs.getRunForRecommend,
+      { runId, workspaceId },
+    );
+
+    // Story 5.5 (AD-6/FR-15): audit the TRIGGER of interpretation. Logged AFTER
+    // getRunForRecommend passes the tenancy/interpretability check (not before) so
+    // a bad/cross-tenant runId that never reaches the engine leaves no triggered
+    // event with no matching outcome. The completion/failure events follow below.
+    await ctx.runMutation(internal.runs.recordInterpretationTriggered, {
+      runId,
+      workspaceId,
+      actor,
+    });
+
+    // callEngine maps the engine error envelope → engine.<code>. Story 5.6
+    // (AD-9, D1): fail-closed codes leave durable state before re-throwing —
+    // `engine.model_unavailable` records the run failed AND flips the global
+    // Engine-Only Mode; `engine.cost_ceiling_exceeded` / `engine.interpretation_timeout`
+    // record the per-Run failure only (no global flip). Transient
+    // ENGINE_UNAVAILABLE / ENGINE_UNCONFIGURED leave NO durable state (5.5's
+    // retry surface). Every case re-throws so 5.5's inline error still shows.
+    let response: RecommendResponse;
+    try {
+      response = await callEngine<RecommendResponse>("/recommendations", {
+        runId,
+        resultSet,
+        diagnosticsBundle,
+      });
+    } catch (err) {
+      await recordInterpretationFailureFromError(ctx, {
+        err,
+        runId,
+        workspaceId,
+        actor,
+      });
+      throw err;
+    }
+
+    // Defensive wire-shape guard (like rederiveRun's ENGINE_INVALID_RESPONSE):
+    // callEngine casts the JSON unchecked, so validate before branching.
+    if (
+      response === null ||
+      typeof response !== "object" ||
+      (response.status !== "accepted" && response.status !== "rejected")
+    ) {
+      throw new ConvexError({
+        code: "ENGINE_INVALID_RESPONSE",
+        message: "The /recommendations response did not match the expected contract.",
+      });
+    }
+
+    // The model responded (accepted OR gate-rejected) → self-heal the global
+    // Engine-Only Mode if it was set (idempotent no-op otherwise, D3/D4).
+    await clearEngineOnlyModeOnSuccess(ctx, { runId, workspaceId, actor });
+
+    if (response.status === "accepted") {
+      if (response.recommendations === null) {
+        throw new ConvexError({
+          code: "ENGINE_INVALID_RESPONSE",
+          message: "An accepted interpretation carried no recommendations document.",
+        });
+      }
+      // storeRecommendations re-validates the document at its typed arg boundary
+      // (AD-10) and audits the transcript.
+      await ctx.runMutation(internal.runs.storeRecommendations, {
+        runId,
+        workspaceId,
+        actor,
+        recommendations: response.recommendations,
+        transcript: response.attempts,
+      });
+      return { status: "accepted" as const };
+    }
+
+    // Rejected: a clean, audited failed-Interpretation (AC-2) — NOT a 500.
+    await ctx.runMutation(internal.runs.recordInterpretationRejection, {
+      runId,
+      workspaceId,
+      actor,
+      transcript: response.attempts,
+      rejections: response.rejectionSummary,
+    });
+    return { status: "rejected" as const };
+  },
+});
+
+// --- Story 5.4: Reserve Report drafting (persistence + audit + action) -------
+
+/** The engine `/reports` response wire shape (discriminated result, transcripts
+ * in every arm — FR-15). `attempts` rides as opaque JSON to the audit payload;
+ * only the `accepted` document is a drift-checked contract. */
+type DraftReportResponse = {
+  status: "accepted" | "rejected";
+  report: ReserveReport | null;
+  attempts: unknown;
+  rejectionSummary: string | null;
+};
+
+/**
+ * Ingredients for report drafting: the run's stored ResultSet + DiagnosticsBundle
+ * + the accepted Recommendations (all passed DOWN into the engine —
+ * engine_service is stateless, AD-3). Internal (the trusted
+ * `generateReserveReport` action is the only caller), BUT it re-checks tenancy
+ * anyway (same RUN_NOT_FOUND for wrong-workspace/absent, so existence never
+ * leaks) because the action passes an attacker-controllable runId. A report is
+ * drafted "Given accepted recommendations" (AC-1 precondition), so a `complete`
+ * run WITHOUT stored recommendations is RUN_NOT_INTERPRETABLE (its message names
+ * the missing recommendations). Mirrors `getRunForRecommend`.
+ */
+export const getRunForDraftReport = internalQuery({
+  args: { runId: v.id("runs"), workspaceId: v.string() },
+  handler: async (ctx, { runId, workspaceId }) => {
+    const run = await ctx.db.get(runId);
+    if (run === null || run.workspaceId !== workspaceId) {
+      throw new ConvexError({
+        code: "RUN_NOT_FOUND",
+        message: "That Run does not exist in this Workspace.",
+      });
+    }
+    if (
+      run.status !== "complete" ||
+      run.resultSet === undefined ||
+      run.diagnosticsBundle === undefined ||
+      run.recommendations === undefined
+    ) {
+      throw new ConvexError({
+        code: "RUN_NOT_INTERPRETABLE",
+        message:
+          "Drafting a Reserve Report needs a completed Run with stored results, " +
+          "diagnostics, and accepted recommendations.",
+      });
+    }
+    return {
+      resultSet: run.resultSet,
+      diagnosticsBundle: run.diagnosticsBundle,
+      recommendations: run.recommendations,
+    };
+  },
+});
+
+/**
+ * Persist the accepted Reserve Report in the `reserveReports` table + audit the
+ * transcript (Story 5.4, FR-11/FR-15). THE schema gate is the typed `report`
+ * arg (`reserveReportValidator`): a schema-invalid document THROWS at the
+ * boundary and is never stored (AD-10). Guarded on `status === "complete"` and
+ * matching workspace (no-op on a vanished / cross-tenant run). Chain of custody:
+ * the document's `runId` must match the run (like storeRecommendations's check
+ * → REPORT_RUN_MISMATCH).
+ *
+ * UPSERT into `reserveReports` via the `by_run` index: re-drafting overwrites
+ * the machine draft (no human edits exist in 5.4 to clobber; Epic 6 guards
+ * human-owned rows). The audit payload carries the transcript(s) — the full LLM
+ * interaction (FR-15, AD-6) — but NO reserve figures (AD-1/leanness; the report
+ * lives on the row). `createdAt` is minted here via the repo's standard
+ * `new Date(Date.now()).toISOString()` (matching `createRun`) — never a
+ * `datetime.now()` in the engine.
+ */
+export const storeReserveReport = internalMutation({
+  args: {
+    runId: v.id("runs"),
+    workspaceId: v.string(),
+    actor: v.string(),
+    report: reserveReportValidator,
+    transcript: v.any(),
+  },
+  handler: async (ctx, { runId, workspaceId, actor, report, transcript }) => {
+    const run = await ctx.db.get(runId);
+    if (run === null || run.workspaceId !== workspaceId || run.status !== "complete") {
+      return;
+    }
+    // Chain of custody (AD-7): the accepted document's correlation key must be
+    // this Run's id — a mismatch means a cross-Run document; never store it.
+    if (report.runId !== (runId as string)) {
+      throw new ConvexError({
+        code: "REPORT_RUN_MISMATCH",
+        message: "The Reserve Report document's runId does not match the Run.",
+      });
+    }
+
+    const createdAt = new Date(Date.now()).toISOString();
+    const existing = await ctx.db
+      .query("reserveReports")
+      .withIndex("by_run", (q) => q.eq("runId", runId))
+      .unique();
+    if (existing !== null) {
+      // Re-draft overwrites the machine draft (regenerable; Epic 6 guards
+      // human-owned rows / versions, which don't exist yet).
+      await ctx.db.patch(existing._id, {
+        report,
+        machineDrafted: true,
+        createdBy: actor,
+        createdAt,
+      });
+    } else {
+      await ctx.db.insert("reserveReports", {
+        workspaceId,
+        runId,
+        status: "draft",
+        machineDrafted: true,
+        report,
+        createdBy: actor,
+        createdAt,
+      });
+    }
+
+    await appendAuditEntryInTransaction(ctx, {
+      workspaceId,
+      actor,
+      eventType: "report.drafted",
+      runId,
+      payload: { runId, transcript },
+    });
+  },
+});
+
+/**
+ * Record a FAILED report drafting (gate/structural exhaustion) — append a
+ * `report.draftRejected` audit entry carrying the transcript + rejections
+ * (AD-5/FR-11 "the rejection with reasons is audit-logged"). Persists NO report
+ * (AC-2 never-partial). Guarded so a vanished / cross-tenant run no-ops. Single
+ * audit writer via `appendAuditEntryInTransaction`.
+ */
+export const recordReportDraftRejection = internalMutation({
+  args: {
+    runId: v.id("runs"),
+    workspaceId: v.string(),
+    actor: v.string(),
+    transcript: v.any(),
+    rejections: v.any(),
+  },
+  handler: async (ctx, { runId, workspaceId, actor, transcript, rejections }) => {
+    const run = await ctx.db.get(runId);
+    if (run === null || run.workspaceId !== workspaceId) return;
+    await appendAuditEntryInTransaction(ctx, {
+      workspaceId,
+      actor,
+      eventType: "report.draftRejected",
+      runId,
+      payload: { runId, transcript, rejections },
+    });
+  },
+});
+
+/**
+ * The stored Reserve Report for one Run, verbatim (Story 5.4, FR-11) — the
+ * report read surface the Epic-6 Report tab subscribes to ONLY when
+ * `hasReserveReport` (getRun's boolean gate). The structural twin of
+ * `getRecommendations`, but reading the dedicated `reserveReports` table.
+ *
+ * Public → requireMember first (AD-4); then a tenancy re-check (fetch the run,
+ * `null` if outside this Workspace — existence never leaks). Returns the
+ * `reserveReports` row verbatim (or `null`); Epic 6 renders it (CitationChip off
+ * `report.<section>.citations`). No projection.
+ *
+ * AD-1: this query only READS and RETURNS the machine-drafted document (whose
+ * figures are already gate-rendered from the ResultSet); it computes nothing.
+ */
+export const getReserveReport = query({
+  args: { workspaceId: v.string(), runId: v.id("runs") },
+  handler: async (ctx, { workspaceId, runId }) => {
+    await requireMember(ctx, workspaceId);
+    const run = await ctx.db.get(runId);
+    if (run === null || run.workspaceId !== workspaceId) return null;
+    return await ctx.db
+      .query("reserveReports")
+      .withIndex("by_run", (q) => q.eq("runId", runId))
+      .unique();
+  },
+});
+
+/**
+ * Draft a Reserve Report through the Provenance Gate (Story 5.4, FR-11, AD-5). A
+ * public ACTION (it must `fetch` the engine): `requireMember` is its FIRST
+ * statement (AD-4), BEFORE the engine call, so an unauthenticated / non-member
+ * caller is rejected without reaching the model plane. **`requireMember`, not
+ * `requireRole`** — machine-drafting a report is not a privileged product-state
+ * approval; approve/publish/override land in Epic 6 (`requireRole(senior_actuary)`).
+ * Mirrors `generateRecommendations`'s documented member-vs-role decision.
+ *
+ * The bounded redraft loop lives server-side in the engine (one HTTP call). This
+ * action is the thin persist+audit tail: fetch → callEngine → branch on the
+ * discriminated result. Re-running overwrites the machine draft in
+ * `reserveReports` (via storeReserveReport's upsert); it adds NO run-status value
+ * (interpretation status/lifecycle is 5.5/5.6/Epic 6).
+ */
+export const generateReserveReport = action({
+  args: { workspaceId: v.string(), runId: v.id("runs") },
+  returns: v.object({ status: v.union(v.literal("accepted"), v.literal("rejected")) }),
+  handler: async (
+    ctx,
+    { workspaceId, runId },
+  ): Promise<{ status: "accepted" | "rejected" }> => {
+    // AD-4: identity + Workspace membership before anything else (before fetch).
+    const { identity } = await requireMember(ctx, workspaceId);
+    const actor = identity.subject;
+
+    // Tenancy re-check happens inside getRunForDraftReport (runId is
+    // attacker-controllable); it throws RUN_NOT_FOUND for wrong-workspace/absent
+    // and RUN_NOT_INTERPRETABLE for a Run without results + diagnostics +
+    // recommendations (AC-1 precondition).
+    const { resultSet, diagnosticsBundle, recommendations } = await ctx.runQuery(
+      internal.runs.getRunForDraftReport,
+      { runId, workspaceId },
+    );
+
+    // callEngine maps the engine error envelope → engine.<code>. Story 5.6
+    // (AD-9, D1): identical fail-closed wiring to generateRecommendations —
+    // model outage flips the global mode, cost/timeout are per-Run only,
+    // transient errors leave no durable state; every case re-throws.
+    let response: DraftReportResponse;
+    try {
+      response = await callEngine<DraftReportResponse>("/reports", {
+        runId,
+        resultSet,
+        diagnosticsBundle,
+        recommendations,
+      });
+    } catch (err) {
+      await recordInterpretationFailureFromError(ctx, {
+        err,
+        runId,
+        workspaceId,
+        actor,
+      });
+      throw err;
+    }
+
+    // Defensive wire-shape guard (like generateRecommendations's
+    // ENGINE_INVALID_RESPONSE): callEngine casts the JSON unchecked, so validate
+    // before branching.
+    if (
+      response === null ||
+      typeof response !== "object" ||
+      (response.status !== "accepted" && response.status !== "rejected")
+    ) {
+      throw new ConvexError({
+        code: "ENGINE_INVALID_RESPONSE",
+        message: "The /reports response did not match the expected contract.",
+      });
+    }
+
+    // The model responded → self-heal the global Engine-Only Mode (idempotent).
+    await clearEngineOnlyModeOnSuccess(ctx, { runId, workspaceId, actor });
+
+    if (response.status === "accepted") {
+      if (response.report === null) {
+        throw new ConvexError({
+          code: "ENGINE_INVALID_RESPONSE",
+          message: "An accepted drafting carried no Reserve Report document.",
+        });
+      }
+      // storeReserveReport re-validates the document at its typed arg boundary
+      // (AD-10) and audits the transcript.
+      await ctx.runMutation(internal.runs.storeReserveReport, {
+        runId,
+        workspaceId,
+        actor,
+        report: response.report,
+        transcript: response.attempts,
+      });
+      return { status: "accepted" as const };
+    }
+
+    // Rejected: a clean, audited failed drafting (AC-2/AC-4) — NOT a 500, never
+    // a silent queue.
+    await ctx.runMutation(internal.runs.recordReportDraftRejection, {
+      runId,
+      workspaceId,
+      actor,
+      transcript: response.attempts,
+      rejections: response.rejectionSummary,
+    });
+    return { status: "rejected" as const };
   },
 });

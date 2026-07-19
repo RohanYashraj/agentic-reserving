@@ -15,19 +15,30 @@ without touching the environment). Run locally with the factory flag:
     uv run uvicorn engine_service.app:create_app --factory
 """
 
+from collections.abc import Callable
+
+from agno.models.base import Model
 from fastapi import Depends, FastAPI
 from fastapi.responses import JSONResponse
 
+from copilot_agent import ModelCallError, build_gemini_model, probe_model
 from engine_service.auth import make_service_auth
 from engine_service.config import Settings, load_settings
 from engine_service.errors import register_exception_handlers
+from engine_service.interpretation_errors import ModelUnavailableError
 from engine_service.models import (
     CanonicalizeResponse,
+    DraftReportRequest,
+    DraftReportResponse,
     ReDeriveRequest,
+    RecommendRequest,
+    RecommendResponse,
     RunRequest,
     RunResponse,
     ValidateRequest,
 )
+from engine_service.recommendations_flow import generate_recommendations
+from engine_service.report_flow import generate_reserve_report
 from reserving_engine import (
     compute_diagnostics,
     rederive,
@@ -37,9 +48,28 @@ from reserving_engine import (
 )
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(
+    settings: Settings | None = None,
+    *,
+    build_model: Callable[[], Model] | None = None,
+) -> FastAPI:
     if settings is None:
         settings = load_settings()
+
+    # The model seam (AD-8): prod builds the Gemini model from config on each
+    # /recommendations request (so a missing key fails per-request into
+    # ModelNotConfiguredError → model_unavailable, never at boot — AD-9). Tests
+    # inject a scripted model via `build_model` without a live key.
+    if build_model is None:
+        def build_model() -> Model:
+            # Story 5.6 review F18: pass the per-Run interpretation timeout as the
+            # hard per-call wall-clock bound (the SDK aborts a hung Gemini call at
+            # http_options.timeout), so a single hung call cannot exceed NFR-7.
+            return build_gemini_model(
+                settings.gemini_api_key,
+                settings.gemini_model_id,
+                timeout=settings.interpretation_timeout_seconds,
+            )
 
     app = FastAPI(title="engine_service", version="0.1.0")
     register_exception_handlers(app)
@@ -80,5 +110,66 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             request.triangle, request.stored_result_set, run_id=request.run_id
         )
         return JSONResponse(content=report.model_dump(mode="json", by_alias=True))
+
+    @app.post("/recommendations", dependencies=[auth])
+    def recommendations(request: RecommendRequest) -> JSONResponse:
+        # Story 5.3 (FR-10, AD-1/AD-5/AD-9): a thin adapter over the bounded
+        # generate-gate-validate loop — build the model (fails closed to
+        # model_unavailable if unconfigured), run the loop, serialize. Both the
+        # accepted and rejected arms return HTTP 200 with the transcript(s) for
+        # audit; ModelNotConfiguredError propagates to the error envelope (503).
+        model = build_model()
+        outcome = generate_recommendations(
+            model,
+            request.result_set,
+            request.diagnostics_bundle,
+            max_attempts=settings.interpretation_max_attempts,
+            token_ceiling=settings.interpretation_token_ceiling,
+            timeout_seconds=settings.interpretation_timeout_seconds,
+        )
+        response = RecommendResponse.from_outcome(request.run_id, outcome)
+        return JSONResponse(content=response.model_dump(mode="json", by_alias=True))
+
+    @app.post("/reports", dependencies=[auth])
+    def reports(request: DraftReportRequest) -> JSONResponse:
+        # Story 5.4 (FR-11, AD-1/AD-5/AD-9): a thin adapter over the bounded
+        # draft-gate-validate loop — build the model (fails closed to
+        # model_unavailable if unconfigured), run the loop over the accepted
+        # recommendations, serialize. Both the accepted and rejected arms return
+        # HTTP 200 with the transcript(s) for audit; ModelNotConfiguredError
+        # propagates to the error envelope (503).
+        model = build_model()
+        outcome = generate_reserve_report(
+            model,
+            request.result_set,
+            request.diagnostics_bundle,
+            request.recommendations,
+            max_attempts=settings.interpretation_max_attempts,
+            token_ceiling=settings.interpretation_token_ceiling,
+            timeout_seconds=settings.interpretation_timeout_seconds,
+        )
+        response = DraftReportResponse.from_outcome(request.run_id, outcome)
+        return JSONResponse(content=response.model_dump(mode="json", by_alias=True))
+
+    @app.get("/interpretation/health", dependencies=[auth])
+    def interpretation_health() -> JSONResponse:
+        # Story 5.6 (AD-9, D3): the "is the interpretation model reachable?" probe
+        # the Convex `probeInterpretationMode` action uses for Engine-Only Mode
+        # recovery. A missing/misconfigured model raises ModelNotConfiguredError →
+        # 503 `model_unavailable`. Review F17: building the model only proves it is
+        # CONFIGURED, not REACHABLE — a live Gemini outage would otherwise return
+        # 200 and falsely clear Engine-Only Mode. So we also issue one minimal
+        # model-plane call (`probe_model`); a live outage raises ModelCallError →
+        # 503 `model_unavailable`, keeping the workspace in Engine-Only Mode until
+        # the model genuinely recovers. Runs no interpretation (no ResultSet, no
+        # gate); the api key is never echoed (AD-12).
+        model = build_model()
+        try:
+            probe_model(model)
+        except ModelCallError as exc:
+            raise ModelUnavailableError(
+                "the interpretation model is not reachable"
+            ) from exc
+        return JSONResponse(content={"ok": True})
 
     return app

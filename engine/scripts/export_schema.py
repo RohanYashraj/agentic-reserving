@@ -21,6 +21,8 @@ from pathlib import Path
 from reserving_engine import (
     DiagnosticsBundle,
     ReDerivationReport,
+    Recommendations,
+    ReserveReport,
     ResultSet,
     Triangle,
     ValidationReport,
@@ -44,6 +46,16 @@ _TARGETS = {
     # Story 4.7: the re-derivation outcome crosses the Convex↔engine boundary
     # (the /rederive response), so it earns full AD-10 drift rigor.
     ReDerivationReport: "rederivation-report.schema.json",
+    # Story 5.3: the accepted Recommendations document is persisted on the runs
+    # row (the /recommendations response's accepted arm), so it joins the
+    # drift-checked contract. RecommendationRejection and the agent's raw draft
+    # do NOT cross as persisted state and are deliberately not exported (5.3 §2.4).
+    Recommendations: "recommendations.schema.json",
+    # Story 5.4: the accepted ReserveReport document is persisted in the
+    # dedicated reserveReports table (the /reports response's accepted arm), so
+    # it joins the drift-checked contract. ReserveReportRejection and the
+    # agent's raw draft do NOT cross as persisted state (5.4 §2.4).
+    ReserveReport: "reserve-report.schema.json",
 }
 
 

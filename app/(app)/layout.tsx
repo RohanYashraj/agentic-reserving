@@ -3,6 +3,7 @@ import { auth } from "@clerk/nextjs/server";
 import { redirect } from "next/navigation";
 import { ReactNode } from "react";
 
+import { EngineOnlyBanner } from "@/components/EngineOnlyBanner";
 import { SidebarNav } from "@/components/SidebarNav";
 
 export default async function AppLayout({
@@ -39,6 +40,12 @@ export default async function AppLayout({
         <SidebarNav />
       </aside>
       <div className="flex flex-1 flex-col">
+        {/* Story 5.6: the workspace-global Engine-Only Mode strip — the topmost
+            full-bleed element of the content column, above the app chrome
+            (DESIGN.md:114/:128). It self-subscribes (this is a server component)
+            and renders nothing unless the mode is active; only mounted here where
+            orgId is guaranteed present (the !orgId branch returns above). */}
+        <EngineOnlyBanner />
         <header className="flex items-center justify-between border-b border-border px-6 py-3">
           <OrganizationSwitcher hidePersonal />
           <UserButton />

@@ -55,7 +55,30 @@ function makeRun(overrides: Partial<RunView> = {}): RunView {
     failedAt: null,
     hasResults: false,
     hasDiagnostics: false,
+    hasRecommendations: false,
+    interpretationFailure: null,
     ...overrides,
+  };
+}
+
+// Story 5.5: minimal accepted Recommendations doc — one row per origin, each
+// reason pinned to a `dx:` id present in makeDiagnosticsBundle.
+function makeRecommendations(): import("@/convex/lib/engineContract").Recommendations {
+  return {
+    schemaVersion: "1.0.0",
+    runId: "r1",
+    recommendations: [
+      {
+        origin: "2019",
+        method: "bornhuetter_ferguson",
+        reasons: [
+          {
+            text: "Stable development supports BF.",
+            citations: ["dx:r1:ave:2019"],
+          },
+        ],
+      },
+    ],
   };
 }
 
@@ -290,6 +313,31 @@ describe("RunDetail (AC2, AC3, AC4)", () => {
     expect(screen.getByText(/Residual heatmap/i)).toBeDefined();
   });
 
+  it("Engine-Only Mode (engineOnly=true): Diagnostics stay fully viewable, Interpretation trigger disabled (Story 5.6, AC-3/NFR-2)", () => {
+    render(
+      <RunDetail
+        run={makeRun({ status: "complete", hasResults: true, hasDiagnostics: true })}
+        diagnosticsBundle={makeDiagnosticsBundle()}
+        resultSet={undefined}
+        onRetry={vi.fn()}
+        onGenerateInterpretation={vi
+          .fn<() => Promise<{ status: "accepted" | "rejected" }>>()
+          .mockResolvedValue({ status: "accepted" })}
+        engineOnly
+      />,
+    );
+    // NFR-2 invariant: Diagnostics render fully while in Engine-Only Mode.
+    fireEvent.click(screen.getByRole("button", { name: "Diagnostics" }));
+    expect(
+      screen.getByText(/LDF stability by development period/i),
+    ).toBeDefined();
+    expect(screen.getByText(/Residual heatmap/i)).toBeDefined();
+    // The Interpretation trigger is disabled (AC-3).
+    fireEvent.focus(screen.getByRole("tab", { name: "Interpretation" }));
+    const button = screen.getByRole("button", { name: /Generate interpretation/i });
+    expect((button as HTMLButtonElement).disabled).toBe(true);
+  });
+
   it("deep link: a #<diagnosticId> hash opens the Diagnostics tab + selects it (Story 4.6, AC4)", () => {
     window.location.hash = "#dx:r1:residual:2019:12";
     const { container } = render(
@@ -308,6 +356,49 @@ describe("RunDetail (AC2, AC3, AC4)", () => {
       ) as HTMLElement,
     );
     expect(rail.getByText("Residual 2019 · 12→24")).toBeDefined();
+  });
+
+  it("citation chip click switches to the Diagnostics tab + selects the id (Story 5.5, D6)", () => {
+    const onGenerateInterpretation = vi
+      .fn<() => Promise<{ status: "accepted" | "rejected" }>>()
+      .mockResolvedValue({ status: "accepted" });
+    const { container } = render(
+      <RunDetail
+        run={makeRun({
+          status: "complete",
+          hasResults: true,
+          hasDiagnostics: true,
+          hasRecommendations: true,
+          completedAt: "2026-07-19T00:00:02.000Z",
+        })}
+        diagnosticsBundle={makeDiagnosticsBundle()}
+        recommendations={makeRecommendations()}
+        onRetry={vi.fn()}
+        onGenerateInterpretation={onGenerateInterpretation}
+      />,
+    );
+
+    // Switch to the Interpretation tab; the accepted table renders with a chip.
+    // Radix Tabs activate on focus (automatic mode), not a bare click in jsdom.
+    fireEvent.focus(screen.getByRole("tab", { name: "Interpretation" }));
+    const chip = screen.getByRole("link", {
+      name: /Citation, diagnostic Actual vs expected, 2019/i,
+    });
+    // Clicking the chip sets the raw dx: hash…
+    fireEvent.click(chip);
+    expect(window.location.hash).toBe("#dx:r1:ave:2019");
+    // The hashchange listener does not auto-fire in jsdom on assignment, so
+    // dispatch it explicitly to exercise RunDetail's D6 effect.
+    fireEvent(window, new HashChangeEvent("hashchange"));
+
+    // …which flips to the Diagnostics tab and selects the AvE element into the rail.
+    expect(screen.getByText(/Residual heatmap/i)).toBeDefined();
+    const rail = within(
+      container.querySelector(
+        'aside[aria-label="Selected diagnostic detail"]',
+      ) as HTMLElement,
+    );
+    expect(rail.getByText(/Actual vs expected — 2019/i)).toBeDefined();
   });
 
   it("no polling primitive: the component has no interval/timeout-based refetch (FR-20)", () => {

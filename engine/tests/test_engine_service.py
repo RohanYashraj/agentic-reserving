@@ -71,7 +71,9 @@ def _run_body(run_id: str, triangle: Triangle, parameters: RunParameters | None 
 
 
 class TestAuth:
-    @pytest.mark.parametrize("path", ["/validate", "/runs", "/canonicalize", "/rederive"])
+    @pytest.mark.parametrize(
+        "path", ["/validate", "/runs", "/canonicalize", "/rederive", "/recommendations", "/reports"]
+    )
     def test_missing_authorization_header_is_401(self, client: TestClient, path: str) -> None:
         resp = client.post(path, json={})
         assert resp.status_code == 401
@@ -79,18 +81,24 @@ class TestAuth:
         assert body["code"] == "unauthorized"
         assert set(body) == {"code", "message", "details"}
 
-    @pytest.mark.parametrize("path", ["/validate", "/runs", "/canonicalize", "/rederive"])
+    @pytest.mark.parametrize(
+        "path", ["/validate", "/runs", "/canonicalize", "/rederive", "/recommendations", "/reports"]
+    )
     def test_wrong_secret_is_401(self, client: TestClient, path: str) -> None:
         resp = client.post(path, json={}, headers={"Authorization": "Bearer wrong-secret"})
         assert resp.status_code == 401
         assert resp.json()["code"] == "unauthorized"
 
-    @pytest.mark.parametrize("path", ["/validate", "/runs", "/canonicalize", "/rederive"])
+    @pytest.mark.parametrize(
+        "path", ["/validate", "/runs", "/canonicalize", "/rederive", "/recommendations", "/reports"]
+    )
     def test_non_bearer_scheme_is_401(self, client: TestClient, path: str) -> None:
         resp = client.post(path, json={}, headers={"Authorization": f"Basic {TEST_SECRET}"})
         assert resp.status_code == 401
 
-    @pytest.mark.parametrize("path", ["/validate", "/runs", "/canonicalize", "/rederive"])
+    @pytest.mark.parametrize(
+        "path", ["/validate", "/runs", "/canonicalize", "/rederive", "/recommendations", "/reports"]
+    )
     def test_non_ascii_token_is_401_not_500(self, client: TestClient, path: str) -> None:
         # A non-ASCII bearer token must fail closed as 401 — never crash the
         # constant-time compare (TypeError) into an unhandled 500. Sent as raw
@@ -433,3 +441,429 @@ class TestRederive:
         )
         assert resp.status_code == 422
         assert resp.json()["code"] == "bad_request"
+
+
+# --------------------------------------------------------------------------- #
+# Story 5.3: POST /recommendations — the interpretation endpoint (AC-1..4)      #
+# --------------------------------------------------------------------------- #
+
+import json  # noqa: E402
+
+from agno.exceptions import ModelProviderError  # noqa: E402
+from agno.models.base import Model  # noqa: E402
+from agno.models.response import ModelResponse  # noqa: E402
+
+
+class _ScriptedModel(Model):
+    """A scripted model returning a canned final answer per attempt (no network,
+    no google-genai) — the 5.1 injection seam for the endpoint (Task 8.5)."""
+
+    def __init__(self, outputs: list[str]) -> None:
+        super().__init__(id="scripted-endpoint-model")
+        self.provider = "scripted"
+        self._outputs = outputs
+        self._i = 0
+
+    def invoke(self, *args, **kwargs) -> ModelResponse:
+        out = self._outputs[min(self._i, len(self._outputs) - 1)]
+        self._i += 1
+        return ModelResponse(role="assistant", content=out)
+
+    async def ainvoke(self, *args, **kwargs) -> ModelResponse:
+        return self.invoke(*args, **kwargs)
+
+    def invoke_stream(self, *args, **kwargs):
+        yield self.invoke(*args, **kwargs)
+
+    async def ainvoke_stream(self, *args, **kwargs):
+        yield self.invoke(*args, **kwargs)
+
+    def _parse_provider_response(self, response, **kwargs) -> ModelResponse:
+        return response
+
+    def _parse_provider_response_delta(self, response) -> ModelResponse:
+        return response
+
+
+class _RaisingModel(_ScriptedModel):
+    """A model that fails like a LIVE Gemini outage (review F16/F17): Agno
+    funnels provider failures through ``ModelProviderError``. Returns the ``pre``
+    scripted outputs first (attempts that complete before the outage, F6), then
+    raises on every subsequent call."""
+
+    def __init__(self, pre: list[str] | None = None) -> None:
+        super().__init__(pre or [])
+        self._pre = list(pre or [])
+
+    def invoke(self, *args, **kwargs) -> ModelResponse:
+        if self._i < len(self._pre):
+            return super().invoke(*args, **kwargs)
+        raise ModelProviderError(
+            message="gemini is down", model_name="scripted", model_id="x"
+        )
+
+
+REC_RUN_ID = "run-5-3-endpoint"
+
+
+def _rec_run():
+    result_set = run_methods(TAYLOR_ASHE, CL_BF_MACK)
+    bundle = compute_diagnostics(TAYLOR_ASHE, result_set, REC_RUN_ID)
+    return result_set, bundle
+
+
+def _rec_body(run_id: str, result_set, bundle) -> dict:
+    return {
+        "runId": run_id,
+        "resultSet": result_set.model_dump(mode="json", by_alias=True),
+        "diagnosticsBundle": bundle.model_dump(mode="json", by_alias=True),
+    }
+
+
+def _draft_json(result_set, bundle, *, drop_first=False):
+    origins = [o.origin for o in result_set.method_results[0].origin_results]
+    dx_id = bundle.ldf_stability[0].id
+    use = origins[1:] if drop_first else origins
+    recs = [
+        {
+            "origin": origin,
+            "method": "chain_ladder",
+            "reasons": [f"Recommended for {origin} " + "{{" + dx_id + "}}."],
+        }
+        for origin in use
+    ]
+    return json.dumps({"recommendations": recs})
+
+
+def _rec_client(build_model, *, gemini_key: str | None = "k", gemini_model: str | None = "m") -> TestClient:
+    settings = Settings(
+        service_secret=TEST_SECRET,
+        gemini_api_key=gemini_key,
+        gemini_model_id=gemini_model,
+    )
+    return TestClient(create_app(settings=settings, build_model=build_model))
+
+
+class TestRecommendations:
+    def test_accepted_returns_document_and_transcript_200(self) -> None:
+        result_set, bundle = _rec_run()
+        good = _draft_json(result_set, bundle)
+        client = _rec_client(lambda: _ScriptedModel([good]))
+        resp = client.post(
+            "/recommendations", json=_rec_body(REC_RUN_ID, result_set, bundle), headers=AUTH
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "accepted"
+        assert body["recommendations"] is not None
+        assert body["recommendations"]["runId"] == REC_RUN_ID
+        # One recommendation per Origin Period.
+        origins = [o.origin for o in result_set.method_results[0].origin_results]
+        assert len(body["recommendations"]["recommendations"]) == len(origins)
+        # The transcript rides in every arm (FR-15).
+        assert len(body["attempts"]) == 1
+        assert body["rejectionSummary"] is None
+
+    def test_gate_exhaustion_returns_rejected_200_no_recommendations(self) -> None:
+        result_set, bundle = _rec_run()
+        # Persistently missing an origin → the loop exhausts and rejects.
+        bad = _draft_json(result_set, bundle, drop_first=True)
+        client = _rec_client(lambda: _ScriptedModel([bad]))
+        resp = client.post(
+            "/recommendations", json=_rec_body(REC_RUN_ID, result_set, bundle), headers=AUTH
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "rejected"
+        assert body["recommendations"] is None
+        assert len(body["attempts"]) >= 1
+        assert body["rejectionSummary"]
+
+    def test_model_not_configured_is_model_unavailable_503(self) -> None:
+        result_set, bundle = _rec_run()
+        # No injected model + no key → build_gemini_model raises → 503 envelope.
+        client = _rec_client(None, gemini_key=None, gemini_model=None)
+        resp = client.post(
+            "/recommendations", json=_rec_body(REC_RUN_ID, result_set, bundle), headers=AUTH
+        )
+        assert resp.status_code == 503
+        body = resp.json()
+        assert body["code"] == "model_unavailable"
+        assert set(body) == {"code", "message", "details"}
+
+    def test_empty_run_id_is_422_bad_request(self) -> None:
+        result_set, bundle = _rec_run()
+        good = _draft_json(result_set, bundle)
+        client = _rec_client(lambda: _ScriptedModel([good]))
+        resp = client.post(
+            "/recommendations", json=_rec_body("", result_set, bundle), headers=AUTH
+        )
+        assert resp.status_code == 422
+        assert resp.json()["code"] == "bad_request"
+
+
+# --------------------------------------------------------------------------- #
+# Story 5.4: POST /reports — the Reserve Report drafting endpoint (AC-1..4)     #
+# --------------------------------------------------------------------------- #
+
+from reserving_engine import (  # noqa: E402
+    MethodRecommendation,
+    RecommendationReason,
+    Recommendations,
+)
+
+REPORT_RUN_ID = "run-5-4-endpoint"
+
+
+def _report_recommendations(result_set, bundle):
+    citation = bundle.ave[0].id
+    origins = [o.origin for o in result_set.method_results[0].origin_results]
+    return Recommendations(
+        run_id=REPORT_RUN_ID,
+        recommendations=tuple(
+            MethodRecommendation(
+                origin=origin,
+                method="chain_ladder",
+                reasons=(RecommendationReason(text=f"Chosen for {origin}.", citations=(citation,)),),
+            )
+            for origin in origins
+        ),
+    )
+
+
+def _report_run():
+    result_set = run_methods(TAYLOR_ASHE, CL_BF_MACK)
+    bundle = compute_diagnostics(TAYLOR_ASHE, result_set, REPORT_RUN_ID)
+    return result_set, bundle
+
+
+def _report_body(run_id: str, result_set, bundle) -> dict:
+    return {
+        "runId": run_id,
+        "resultSet": result_set.model_dump(mode="json", by_alias=True),
+        "diagnosticsBundle": bundle.model_dump(mode="json", by_alias=True),
+        "recommendations": _report_recommendations(result_set, bundle).model_dump(
+            mode="json", by_alias=True
+        ),
+    }
+
+
+def _report_draft_json(result_set, bundle, *, blank_section=None):
+    dx_id = bundle.ldf_stability[0].id
+    dx_ph = "{{" + dx_id + "}}"
+
+    def _section(name: str, default: str) -> str:
+        return "   " if blank_section == name else default
+
+    return json.dumps(
+        {
+            "executiveSummary": _section("executiveSummary", f"Stable position {dx_ph}."),
+            "methodSelectionRationale": _section(
+                "methodSelectionRationale", f"Chain ladder chosen {dx_ph}."
+            ),
+            "movementCommentary": _section(
+                "movementCommentary", f"No notable movements {dx_ph}."
+            ),
+            "limitations": _section("limitations", "Estimates carry uncertainty."),
+        }
+    )
+
+
+class TestReports:
+    def test_accepted_returns_document_and_transcript_200(self) -> None:
+        result_set, bundle = _report_run()
+        good = _report_draft_json(result_set, bundle)
+        client = _rec_client(lambda: _ScriptedModel([good]))
+        resp = client.post(
+            "/reports", json=_report_body(REPORT_RUN_ID, result_set, bundle), headers=AUTH
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "accepted"
+        assert body["report"] is not None
+        assert body["report"]["runId"] == REPORT_RUN_ID
+        assert body["report"]["machineDrafted"] is True
+        # The four named sections are present.
+        for field in (
+            "executiveSummary",
+            "methodSelectionRationale",
+            "movementCommentary",
+            "limitations",
+        ):
+            assert field in body["report"]
+        # The transcript rides in every arm (FR-15).
+        assert len(body["attempts"]) == 1
+        assert body["rejectionSummary"] is None
+
+    def test_gate_exhaustion_returns_rejected_200_no_report(self) -> None:
+        result_set, bundle = _report_run()
+        # Persistently blank section → the loop exhausts and rejects.
+        bad = _report_draft_json(result_set, bundle, blank_section="limitations")
+        client = _rec_client(lambda: _ScriptedModel([bad]))
+        resp = client.post(
+            "/reports", json=_report_body(REPORT_RUN_ID, result_set, bundle), headers=AUTH
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "rejected"
+        assert body["report"] is None
+        assert len(body["attempts"]) >= 1
+        assert body["rejectionSummary"]
+
+    def test_model_not_configured_is_model_unavailable_503(self) -> None:
+        result_set, bundle = _report_run()
+        client = _rec_client(None, gemini_key=None, gemini_model=None)
+        resp = client.post(
+            "/reports", json=_report_body(REPORT_RUN_ID, result_set, bundle), headers=AUTH
+        )
+        assert resp.status_code == 503
+        body = resp.json()
+        assert body["code"] == "model_unavailable"
+        assert set(body) == {"code", "message", "details"}
+
+    def test_empty_run_id_is_422_bad_request(self) -> None:
+        result_set, bundle = _report_run()
+        good = _report_draft_json(result_set, bundle)
+        client = _rec_client(lambda: _ScriptedModel([good]))
+        resp = client.post(
+            "/reports", json=_report_body("", result_set, bundle), headers=AUTH
+        )
+        assert resp.status_code == 422
+        assert resp.json()["code"] == "bad_request"
+
+
+# --------------------------------------------------------------------------- #
+# Story 5.6: fail-closed budget envelopes (503) + /interpretation/health        #
+# --------------------------------------------------------------------------- #
+
+
+def _budget_client(*, token_ceiling=None, timeout_seconds=600.0) -> TestClient:
+    # A configured client whose interpretation ceiling/timeout are set to trip.
+    # The scripted model is never actually reached when the budget trips at the
+    # pre-attempt guard, so its output is irrelevant.
+    settings = Settings(
+        service_secret=TEST_SECRET,
+        gemini_api_key="k",
+        gemini_model_id="m",
+        interpretation_token_ceiling=token_ceiling,
+        interpretation_timeout_seconds=timeout_seconds,
+    )
+    return TestClient(
+        create_app(settings=settings, build_model=lambda: _ScriptedModel(["{}"]))
+    )
+
+
+class TestBudgetEnvelopes:
+    def test_recommendations_cost_ceiling_is_503_envelope(self) -> None:
+        # A zero token ceiling trips the fail-closed guard before any model turn.
+        result_set, bundle = _rec_run()
+        client = _budget_client(token_ceiling=0)
+        resp = client.post(
+            "/recommendations", json=_rec_body(REC_RUN_ID, result_set, bundle), headers=AUTH
+        )
+        assert resp.status_code == 503
+        body = resp.json()
+        assert body["code"] == "cost_ceiling_exceeded"
+        assert set(body) == {"code", "message", "details"}
+
+    def test_recommendations_timeout_is_503_envelope(self) -> None:
+        # A zero timeout makes the deadline already reached at the first guard.
+        result_set, bundle = _rec_run()
+        client = _budget_client(timeout_seconds=0.0)
+        resp = client.post(
+            "/recommendations", json=_rec_body(REC_RUN_ID, result_set, bundle), headers=AUTH
+        )
+        assert resp.status_code == 503
+        body = resp.json()
+        assert body["code"] == "interpretation_timeout"
+        assert set(body) == {"code", "message", "details"}
+
+    def test_reports_cost_ceiling_is_503_envelope(self) -> None:
+        result_set, bundle = _report_run()
+        client = _budget_client(token_ceiling=0)
+        resp = client.post(
+            "/reports", json=_report_body(REPORT_RUN_ID, result_set, bundle), headers=AUTH
+        )
+        assert resp.status_code == 503
+        assert resp.json()["code"] == "cost_ceiling_exceeded"
+
+    def test_reports_timeout_is_503_envelope(self) -> None:
+        result_set, bundle = _report_run()
+        client = _budget_client(timeout_seconds=0.0)
+        resp = client.post(
+            "/reports", json=_report_body(REPORT_RUN_ID, result_set, bundle), headers=AUTH
+        )
+        assert resp.status_code == 503
+        assert resp.json()["code"] == "interpretation_timeout"
+
+
+class TestInterpretationHealth:
+    def test_health_ok_when_model_builds(self) -> None:
+        client = _rec_client(lambda: _ScriptedModel(["{}"]))
+        resp = client.get("/interpretation/health", headers=AUTH)
+        assert resp.status_code == 200
+        assert resp.json() == {"ok": True}
+
+    def test_health_is_503_model_unavailable_when_unconfigured(self) -> None:
+        # No injected model + no key → build_gemini_model raises → 503 envelope.
+        client = _rec_client(None, gemini_key=None, gemini_model=None)
+        resp = client.get("/interpretation/health", headers=AUTH)
+        assert resp.status_code == 503
+        body = resp.json()
+        assert body["code"] == "model_unavailable"
+        assert set(body) == {"code", "message", "details"}
+
+    def test_health_requires_auth(self) -> None:
+        client = _rec_client(lambda: _ScriptedModel(["{}"]))
+        resp = client.get("/interpretation/health")
+        assert resp.status_code == 401
+        assert resp.json()["code"] == "unauthorized"
+
+    def test_health_is_503_when_model_configured_but_unreachable(self) -> None:
+        # Review F17: a configured-but-unreachable model must NOT report healthy.
+        # The probe issues a real model-plane call → ModelProviderError → 503
+        # model_unavailable, so recovery does not falsely clear Engine-Only Mode.
+        client = _rec_client(lambda: _RaisingModel())
+        resp = client.get("/interpretation/health", headers=AUTH)
+        assert resp.status_code == 503
+        body = resp.json()
+        assert body["code"] == "model_unavailable"
+        assert set(body) == {"code", "message", "details"}
+
+
+class TestRuntimeModelOutage:
+    def test_recommendations_runtime_outage_is_503_model_unavailable(self) -> None:
+        # Review F16: a LIVE outage (not just misconfig) fails closed into the same
+        # 503 model_unavailable so callEngine → engine.model_unavailable → Engine-Only.
+        result_set, bundle = _rec_run()
+        client = _rec_client(lambda: _RaisingModel())
+        resp = client.post(
+            "/recommendations", json=_rec_body(REC_RUN_ID, result_set, bundle), headers=AUTH
+        )
+        assert resp.status_code == 503
+        body = resp.json()
+        assert body["code"] == "model_unavailable"
+
+    def test_runtime_outage_after_completed_attempt_carries_transcripts(self) -> None:
+        # Review F6: attempt 1 completes (gate-rejected); the 503 carries its
+        # transcript in details.attempts so the LLM interaction is still audited.
+        result_set, bundle = _rec_run()
+        bad = _draft_json(result_set, bundle, drop_first=True)  # missing coverage → rejected
+        client = _rec_client(lambda: _RaisingModel(pre=[bad]))
+        resp = client.post(
+            "/recommendations", json=_rec_body(REC_RUN_ID, result_set, bundle), headers=AUTH
+        )
+        assert resp.status_code == 503
+        body = resp.json()
+        assert body["code"] == "model_unavailable"
+        assert body["details"] is not None
+        assert len(body["details"]["attempts"]) == 1
+
+    def test_reports_runtime_outage_is_503_model_unavailable(self) -> None:
+        result_set, bundle = _report_run()
+        client = _rec_client(lambda: _RaisingModel())
+        resp = client.post(
+            "/reports", json=_report_body(REPORT_RUN_ID, result_set, bundle), headers=AUTH
+        )
+        assert resp.status_code == 503
+        assert resp.json()["code"] == "model_unavailable"

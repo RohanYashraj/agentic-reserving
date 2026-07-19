@@ -31,13 +31,23 @@ function isEnvelope(body: unknown): body is EngineErrorEnvelope {
 }
 
 /**
- * POST `body` as JSON to `path` on the engine service and return the parsed
- * response. On a non-2xx with the standard `{code, message, details?}`
- * envelope, throws `ConvexError` with code `engine.<code>` and the message
- * preserved. On an unparseable/unexpected failure (5xx HTML, network), throws
- * `ENGINE_UNAVAILABLE`. Missing config throws `ENGINE_UNCONFIGURED`.
+ * Call `path` on the engine service and return the parsed response. Defaults to
+ * a JSON `POST` of `body`; pass `{ method: "GET" }` for a bodyless GET (Story
+ * 5.6's `/interpretation/health` probe) so the shared service-auth + envelope
+ * handling stay single-sourced here rather than duplicated in a hand-rolled
+ * fetch. On a non-2xx with the standard `{code, message, details?}` envelope,
+ * throws `ConvexError` with code `engine.<code>` and the message preserved —
+ * so the new `cost_ceiling_exceeded` / `interpretation_timeout` codes arrive as
+ * `engine.cost_ceiling_exceeded` / `engine.interpretation_timeout` with no
+ * per-code branch here (Story 5.6, Task 3.1). On an unparseable/unexpected
+ * failure (5xx HTML, network), throws `ENGINE_UNAVAILABLE`. Missing config
+ * throws `ENGINE_UNCONFIGURED`.
  */
-export async function callEngine<T>(path: string, body: unknown): Promise<T> {
+export async function callEngine<T>(
+  path: string,
+  body: unknown,
+  options?: { method?: "POST" | "GET" },
+): Promise<T> {
   const base = process.env.ENGINE_SERVICE_URL;
   const secret = process.env.ENGINE_SERVICE_SECRET;
   if (!base || !secret) {
@@ -47,16 +57,24 @@ export async function callEngine<T>(path: string, body: unknown): Promise<T> {
     });
   }
 
+  const method = options?.method ?? "POST";
+  // GET carries no body/content-type; POST sends `body` as JSON. Auth + envelope
+  // handling below are identical for both (single-sourced).
+  const init: RequestInit =
+    method === "GET"
+      ? { method: "GET", headers: { authorization: `Bearer ${secret}` } }
+      : {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: `Bearer ${secret}`,
+          },
+          body: JSON.stringify(body),
+        };
+
   let res: Response;
   try {
-    res = await fetch(`${base}${path}`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${secret}`,
-      },
-      body: JSON.stringify(body),
-    });
+    res = await fetch(`${base}${path}`, init);
   } catch {
     // Network-level failure — never leak the URL or secret.
     throw new ConvexError({
