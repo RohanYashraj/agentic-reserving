@@ -1,0 +1,7 @@
+{
+    "python.testing.unittestEnabled": false,
+    "python.defaultInterpreterPath": "${workspaceFolder}/engine/.venv/bin/python",
+    "python.testing.cwd": "${workspaceFolder}/engine",
+    "python.testing.pytestEnabled": true,
+    "testing.gutterEnabled": true
+}
