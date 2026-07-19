@@ -136,6 +136,39 @@ export const diagnosticsBundleValidator = v.object({
   residuals: v.array(residualElementValidator),
 });
 
+// --- ReDerivationReport (the /rederive response, Story 4.7) ---------------
+
+/**
+ * One figure that did not reproduce on re-derivation (AD-11): where it is and
+ * by how much. `delta` (`stored − rederived`) is engine-computed (AD-1) — Convex
+ * and React carry it, they never subtract. Matches `Discrepancy` in
+ * `reserving_engine/rederivation.py`.
+ */
+const discrepancyValidator = v.object({
+  method: v.string(),
+  field: v.string(),
+  key: v.string(),
+  stored: v.number(),
+  rederived: v.number(),
+  delta: v.number(),
+});
+
+/**
+ * The outcome of replaying a stored ResultSet from its Lineage (FR-6). Wire
+ * shape of the engine `/rederive` response — a full AD-10 drift-checked contract
+ * (`schemas/rederivation-report.schema.json`). `triangleHashVerified` separates
+ * the two failure modes (broken chain of custody vs altered figures); `tier`
+ * records which AD-11 comparison ran (exact on the pinned platform, else 1e-8).
+ */
+export const reDerivationReportValidator = v.object({
+  schemaVersion: v.string(),
+  runId: v.string(),
+  reproduced: v.boolean(),
+  triangleHashVerified: v.boolean(),
+  tier: v.union(v.literal("exact"), v.literal("epsilon")),
+  discrepancies: v.array(discrepancyValidator),
+});
+
 // --- Triangle (the /validate + /runs request body) -----------------------
 
 /**
@@ -198,6 +231,8 @@ export const canonicalizeResponseValidator = v.object({
 
 export type ResultSet = Infer<typeof resultSetValidator>;
 export type DiagnosticsBundle = Infer<typeof diagnosticsBundleValidator>;
+export type Discrepancy = Infer<typeof discrepancyValidator>;
+export type ReDerivationReport = Infer<typeof reDerivationReportValidator>;
 // Run parameters (camelCase wire shape — same as `Lineage.parameters`, and the
 // `/runs` request `parameters` body). Story 4.1 stores a `RunParameters` on the
 // `runs` row; Story 4.2 sends it to the engine verbatim. Not the snake_case

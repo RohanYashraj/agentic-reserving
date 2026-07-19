@@ -1,5 +1,6 @@
 # generated: 2026-07-16
 # last_updated: 2026-07-19
+# 4-7 status: backlog → ready-for-dev (create-story) → in-progress → review (dev-story)
 # project: agentic-reserving
 # project_key: NOKEY
 # tracking_system: file-system
@@ -78,7 +79,7 @@ development_status:
   4-4-results-tab-with-provenance-popover: review
   4-5-diagnostics-review-panels: review
   4-6-diagnostic-context-rail-and-deep-linking: review
-  4-7-resultset-re-derivation-from-lineage: backlog
+  4-7-resultset-re-derivation-from-lineage: review
   epic-4-retrospective: optional
 
   epic-5: backlog

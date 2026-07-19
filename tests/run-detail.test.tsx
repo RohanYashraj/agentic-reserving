@@ -6,6 +6,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -317,5 +318,98 @@ describe("RunDetail (AC2, AC3, AC4)", () => {
       "utf8",
     );
     expect(source).not.toMatch(/setInterval|setTimeout/);
+  });
+});
+
+// --- Story 4.7: re-derive trigger + outcome panel (AC1, AC5) -----------------
+
+function makeReport(
+  overrides: Partial<import("@/convex/lib/engineContract").ReDerivationReport> = {},
+): import("@/convex/lib/engineContract").ReDerivationReport {
+  return {
+    schemaVersion: "1.0.0",
+    runId: "r1",
+    reproduced: true,
+    triangleHashVerified: true,
+    tier: "exact",
+    discrepancies: [],
+    ...overrides,
+  };
+}
+
+const completeRun = () =>
+  makeRun({
+    status: "complete",
+    hasResults: true,
+    hasDiagnostics: true,
+    completedAt: "2026-07-19T00:00:02.000Z",
+  });
+
+describe("RunDetail — re-derivation (Story 4.7, AC1/AC5)", () => {
+  it("a completed run with onRederive shows the Re-derive button", () => {
+    render(<RunDetail run={completeRun()} onRetry={vi.fn()} onRederive={vi.fn()} />);
+    expect(screen.getByRole("button", { name: /re-derive/i })).toBeDefined();
+  });
+
+  it("a non-complete run shows no Re-derive button", () => {
+    render(
+      <RunDetail
+        run={makeRun({ status: "running" })}
+        onRetry={vi.fn()}
+        onRederive={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: /re-derive/i })).toBeNull();
+  });
+
+  it("a completed run without onRederive shows no button (degrades cleanly)", () => {
+    render(<RunDetail run={completeRun()} onRetry={vi.fn()} />);
+    expect(screen.queryByRole("button", { name: /re-derive/i })).toBeNull();
+  });
+
+  it("reproduced → clicking renders the green confirmation naming the tier", async () => {
+    const onRederive = vi.fn().mockResolvedValue(makeReport({ tier: "exact" }));
+    render(<RunDetail run={completeRun()} onRetry={vi.fn()} onRederive={onRederive} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /^re-derive$/i }));
+    expect(onRederive).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText(/Reproduced ✓/)).toBeDefined();
+    expect(screen.getByText(/pinned platform/i)).toBeDefined();
+  });
+
+  it("discrepancy → clicking renders the discrepancy table with the delta", async () => {
+    const onRederive = vi.fn().mockResolvedValue(
+      makeReport({
+        reproduced: false,
+        tier: "exact",
+        discrepancies: [
+          {
+            method: "chain_ladder",
+            field: "ultimate",
+            key: "2019",
+            stored: 5201,
+            rederived: 5200,
+            delta: 1,
+          },
+        ],
+      }),
+    );
+    render(<RunDetail run={completeRun()} onRetry={vi.fn()} onRederive={onRederive} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /^re-derive$/i }));
+    expect(await screen.findByText(/did not reproduce/i)).toBeDefined();
+    // The per-figure row + engine-computed signed delta (display only, AD-1).
+    expect(screen.getByText("ultimate")).toBeDefined();
+    expect(screen.getByText("+1")).toBeDefined();
+  });
+
+  it("a re-derivation error is surfaced in an alert", async () => {
+    const onRederive = vi.fn().mockRejectedValue(new Error("The engine is down."));
+    render(<RunDetail run={completeRun()} onRetry={vi.fn()} onRederive={onRederive} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /^re-derive$/i }));
+    await waitFor(() =>
+      expect(screen.getByText("The engine is down.")).toBeDefined(),
+    );
   });
 });

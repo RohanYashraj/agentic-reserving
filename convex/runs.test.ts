@@ -1264,3 +1264,204 @@ describe("retryRun — idempotent re-entry (AC4, AC6)", () => {
     expect((await getRun(t, runId))?.status).toBe("failed"); // untouched
   });
 });
+
+// --- Story 4.7: ResultSet re-derivation (rederiveRun) (AC1–AC4, AC7) ---------
+
+/** A `run.rederived` engine report the stubbed /rederive endpoint returns. */
+function makeRederivationReport(
+  overrides: Partial<{
+    reproduced: boolean;
+    triangleHashVerified: boolean;
+    tier: "exact" | "epsilon";
+    discrepancies: unknown[];
+  }> = {},
+) {
+  return {
+    schemaVersion: "1.0.0",
+    runId: "run",
+    reproduced: overrides.reproduced ?? true,
+    triangleHashVerified: overrides.triangleHashVerified ?? true,
+    tier: overrides.tier ?? "epsilon",
+    discrepancies: overrides.discrepancies ?? [],
+  };
+}
+
+/** Seed a run row directly with the given status/hashes (no orchestration). */
+async function seedRederivableRun(
+  t: Harness,
+  {
+    workspaceId = "org_A",
+    status = "complete" as "queued" | "running" | "complete" | "failed",
+    runHash = TRIANGLE_HASH,
+    resultHash = TRIANGLE_HASH,
+    withResult = true,
+  } = {},
+): Promise<Id<"runs">> {
+  const triangleId = await seedValidatedTriangle(t, workspaceId);
+  return await t.run((ctx) =>
+    ctx.db.insert("runs", {
+      workspaceId,
+      triangleId,
+      triangleHash: runHash,
+      status,
+      parameters: { methods: ["chain_ladder"], aprioriLossRatios: [] },
+      createdBy: "user_seed",
+      createdAt: "2026-07-18T00:00:00.000Z",
+      ...(withResult && status === "complete"
+        ? { resultSet: makeResultSet(resultHash), completedAt: "2026-07-18T02:00:00.000Z" }
+        : {}),
+    }),
+  );
+}
+
+describe("rederiveRun — re-derivation from Lineage (AC1–AC4, AC7)", () => {
+  beforeEach(() => {
+    vi.stubEnv("ENGINE_SERVICE_URL", "http://engine.test");
+    vi.stubEnv("ENGINE_SERVICE_SECRET", "test-secret");
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  test("reproduced → returns the report, audits run.rederived (lean), run row unchanged", async () => {
+    const t = initConvexTest();
+    const runId = await seedRederivableRun(t);
+    const report = makeRederivationReport({ reproduced: true, tier: "epsilon" });
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(report));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const out = await t
+      .withIdentity(analystA)
+      .action(api.runs.rederiveRun, { workspaceId: "org_A", runId });
+
+    expect(out.reproduced).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // The wire body re-derives from the stored ResultSet (not the run params).
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("http://engine.test/rederive");
+    const body = JSON.parse((init as RequestInit).body as string);
+    expect(body.runId).toBe(runId);
+    expect(body.storedResultSet.lineage.triangleHash).toBe(TRIANGLE_HASH);
+
+    // Audit: exactly one run.rederived, lean payload, no reserve figures.
+    const audits = await auditRows(t);
+    const rederived = audits.filter((a) => a.eventType === "run.rederived");
+    expect(rederived).toHaveLength(1);
+    expect(rederived[0].runId).toBe(runId);
+    expect(rederived[0].payload).toMatchObject({
+      runId,
+      reproduced: true,
+      triangleHashVerified: true,
+      tier: "epsilon",
+      discrepancyCount: 0,
+    });
+
+    // Immutability: the run row is untouched (status + stored ResultSet).
+    const run = (await runRows(t))[0];
+    expect(run.status).toBe("complete");
+    expect(run.resultSet).toEqual(makeResultSet(TRIANGLE_HASH));
+  });
+
+  test("discrepancy report → still audited (reproduced=false), run row unchanged", async () => {
+    const t = initConvexTest();
+    const runId = await seedRederivableRun(t);
+    const report = makeRederivationReport({
+      reproduced: false,
+      discrepancies: [
+        { method: "chain_ladder", field: "ultimate", key: "2019", stored: 201, rederived: 200, delta: 1 },
+      ],
+    });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(report)));
+
+    const out = await t
+      .withIdentity(analystA)
+      .action(api.runs.rederiveRun, { workspaceId: "org_A", runId });
+
+    expect(out.reproduced).toBe(false);
+    expect(out.discrepancies).toHaveLength(1);
+
+    const rederived = (await auditRows(t)).filter((a) => a.eventType === "run.rederived");
+    expect(rederived).toHaveLength(1);
+    expect(rederived[0].payload).toMatchObject({ reproduced: false, discrepancyCount: 1 });
+
+    const run = (await runRows(t))[0];
+    expect(run.status).toBe("complete");
+    expect(run.resultSet).toEqual(makeResultSet(TRIANGLE_HASH));
+  });
+
+  test("a non-complete Run is RUN_NOT_REDERIVABLE (no engine call, no audit)", async () => {
+    const t = initConvexTest();
+    const runId = await seedRederivableRun(t, { status: "queued", withResult: false });
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    let code: string | undefined;
+    try {
+      await t
+        .withIdentity(analystA)
+        .action(api.runs.rederiveRun, { workspaceId: "org_A", runId });
+    } catch (error) {
+      code = (error as ConvexError<{ code: string }>).data.code;
+    }
+    expect(code).toBe("RUN_NOT_REDERIVABLE");
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect((await auditRows(t)).filter((a) => a.eventType === "run.rederived")).toHaveLength(0);
+  });
+
+  test("cross-tenant re-derivation is rejected (existence not leaked)", async () => {
+    const t = initConvexTest();
+    const runId = await seedRederivableRun(t, { workspaceId: "org_A" });
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    // analystB is a member of org_B; reaching org_A's run via their own
+    // workspace throws RUN_NOT_FOUND (same code as absent — no leak).
+    let code: string | undefined;
+    try {
+      await t
+        .withIdentity(analystB)
+        .action(api.runs.rederiveRun, { workspaceId: "org_B", runId });
+    } catch (error) {
+      code = (error as ConvexError<{ code: string }>).data.code;
+    }
+    expect(code).toBe("RUN_NOT_FOUND");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  test("a stored ResultSet whose Lineage hash ≠ run hash is RESULT_HASH_MISMATCH (before dispatch)", async () => {
+    const t = initConvexTest();
+    // run.triangleHash is TRIANGLE_HASH; stamp the stored ResultSet with a
+    // different Lineage hash → chain break caught Convex-side before the fetch.
+    const runId = await seedRederivableRun(t, { runHash: TRIANGLE_HASH, resultHash: "b".repeat(64) });
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    let code: string | undefined;
+    try {
+      await t
+        .withIdentity(analystA)
+        .action(api.runs.rederiveRun, { workspaceId: "org_A", runId });
+    } catch (error) {
+      code = (error as ConvexError<{ code: string }>).data.code;
+    }
+    expect(code).toBe("RESULT_HASH_MISMATCH");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  test("unauthenticated re-derivation is rejected before the engine call (AD-4)", async () => {
+    const t = initConvexTest();
+    const runId = await seedRederivableRun(t);
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    let code: string | undefined;
+    try {
+      await t.action(api.runs.rederiveRun, { workspaceId: "org_A", runId });
+    } catch (error) {
+      code = (error as ConvexError<{ code: string }>).data.code;
+    }
+    expect(code).toBe("UNAUTHENTICATED");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});

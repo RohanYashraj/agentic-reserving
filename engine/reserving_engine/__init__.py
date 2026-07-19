@@ -23,6 +23,11 @@ from reserving_engine.methods import (
     MissingAprioriError,
     run_methods,
 )
+from reserving_engine.rederivation import (
+    Discrepancy,
+    ReDerivationReport,
+    rederive,
+)
 from reserving_engine.resultset import (
     AprioriLossRatio,
     DevelopmentFactor,
@@ -51,6 +56,7 @@ __all__ = [
     "ClBfDivergenceElement",
     "DevelopmentFactor",
     "DiagnosticsBundle",
+    "Discrepancy",
     "InvalidAprioriError",
     "InvalidTriangleError",
     "LdfStabilityElement",
@@ -59,6 +65,7 @@ __all__ = [
     "MethodResult",
     "MissingAprioriError",
     "OriginResult",
+    "ReDerivationReport",
     "ResidualElement",
     "ResultSet",
     "RunParameters",
@@ -69,6 +76,7 @@ __all__ = [
     "canonical_triangle_json",
     "compute_diagnostics",
     "diagnostic_id",
+    "rederive",
     "resolve_diagnostic",
     "run_methods",
     "triangle_hash",

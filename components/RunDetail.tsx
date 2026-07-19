@@ -3,6 +3,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 
 import { DiagnosticsPanels } from "@/components/DiagnosticsPanels";
+import { RederivationPanel } from "@/components/RederivationPanel";
 import { ResultsGrid } from "@/components/ResultsGrid";
 import { StatusBadge } from "@/components/StatusBadge";
 import { StepRail, type RunStatus } from "@/components/StepRail";
@@ -12,6 +13,7 @@ import type { Id } from "@/convex/_generated/dataModel";
 import type {
   DiagnosticsBundle,
   Method,
+  ReDerivationReport,
   ResultSet,
 } from "@/convex/lib/engineContract";
 
@@ -70,14 +72,24 @@ export function RunDetail({
   resultSet,
   diagnosticsBundle,
   onRetry,
+  onRederive,
 }: {
   run: RunView;
   resultSet?: ResultSet | null;
   diagnosticsBundle?: DiagnosticsBundle | null;
   onRetry: () => Promise<void> | void;
+  // Story 4.7: re-derive the stored ResultSet from its Lineage (FR-6). Optional
+  // so the surface degrades cleanly where it is not wired (and pre-4.7 tests).
+  onRederive?: () => Promise<ReDerivationReport>;
 }) {
   const [tab, setTab] = useState<TabKey>("results");
   const [retrying, setRetrying] = useState(false);
+  // Re-derivation is on-demand: the report lives in local state (never
+  // persisted — immutability, AC1), a re-run re-fetches. null = not yet run.
+  const [rederiving, setRederiving] = useState(false);
+  const [rederiveReport, setRederiveReport] =
+    useState<ReDerivationReport | null>(null);
+  const [rederiveError, setRederiveError] = useState<string | null>(null);
   // Deep-link (Story 4.6 AC4): a URL hash names a Diagnostic to open. On mount
   // and on in-app hashchange (future citation chips set location.hash), a
   // non-empty hash switches to the Diagnostics tab and targets the element.
@@ -111,6 +123,22 @@ export function RunDetail({
       // (audit-generating status actions confirm on server ack, UX primitive).
     } finally {
       setRetrying(false);
+    }
+  }
+
+  async function rederive() {
+    if (!onRederive) return;
+    setRederiving(true);
+    setRederiveError(null);
+    try {
+      setRederiveReport(await onRederive());
+    } catch (err) {
+      setRederiveReport(null);
+      setRederiveError(
+        err instanceof Error ? err.message : "Re-derivation could not be run.",
+      );
+    } finally {
+      setRederiving(false);
     }
   }
 
@@ -156,6 +184,40 @@ export function RunDetail({
           </p>
         )}
       </div>
+
+      {/* Story 4.7: re-derive the stored ResultSet from its Lineage (FR-6) —
+          the auditor's reproducibility proof. On-demand; the outcome renders
+          inline. Only a completed Run can be re-derived. */}
+      {run.status === "complete" && onRederive && (
+        <div className="space-y-3">
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => void rederive()}
+              disabled={rederiving}
+              className="w-fit rounded-md border border-border px-3 py-1.5 text-sm font-medium hover:bg-muted disabled:opacity-50"
+            >
+              {rederiving ? "Re-deriving…" : "Re-derive"}
+            </button>
+            <span className="text-sm text-muted-foreground">
+              Replay this ResultSet from its Lineage to prove reproducibility.
+            </span>
+          </div>
+
+          {rederiveError && (
+            <p
+              className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive"
+              role="alert"
+            >
+              {rederiveError}
+            </p>
+          )}
+
+          {rederiveReport && (
+            <RederivationPanel report={rederiveReport} />
+          )}
+        </div>
+      )}
 
       {run.status === "failed" && (
         <div

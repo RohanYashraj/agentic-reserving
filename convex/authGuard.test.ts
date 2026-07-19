@@ -80,6 +80,9 @@ const publicFunctionArgs: Record<string, Record<string, unknown>> = {
   "runs:getResultSet": { workspaceId: "org_test" },
   "runs:getDiagnosticsBundle": { workspaceId: "org_test" },
   "runs:retryRun": { workspaceId: "org_test" },
+  // rederiveRun (Story 4.7) is a public ACTION; requireMember is its first
+  // statement, so an unauthenticated call is rejected before the engine fetch.
+  "runs:rederiveRun": { workspaceId: "org_test" },
 };
 
 type Harness = TestConvex<SchemaDefinition<GenericSchema, boolean>>;
@@ -237,7 +240,8 @@ describe("auth-guard enumeration (NFR-3)", () => {
         path === "runs:getRun" ||
         path === "runs:getResultSet" ||
         path === "runs:getDiagnosticsBundle" ||
-        path === "runs:retryRun"
+        path === "runs:retryRun" ||
+        path === "runs:rederiveRun"
       ) {
         return { ...publicFunctionArgs[path], runId };
       }

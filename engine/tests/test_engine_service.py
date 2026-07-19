@@ -71,7 +71,7 @@ def _run_body(run_id: str, triangle: Triangle, parameters: RunParameters | None 
 
 
 class TestAuth:
-    @pytest.mark.parametrize("path", ["/validate", "/runs", "/canonicalize"])
+    @pytest.mark.parametrize("path", ["/validate", "/runs", "/canonicalize", "/rederive"])
     def test_missing_authorization_header_is_401(self, client: TestClient, path: str) -> None:
         resp = client.post(path, json={})
         assert resp.status_code == 401
@@ -79,18 +79,18 @@ class TestAuth:
         assert body["code"] == "unauthorized"
         assert set(body) == {"code", "message", "details"}
 
-    @pytest.mark.parametrize("path", ["/validate", "/runs", "/canonicalize"])
+    @pytest.mark.parametrize("path", ["/validate", "/runs", "/canonicalize", "/rederive"])
     def test_wrong_secret_is_401(self, client: TestClient, path: str) -> None:
         resp = client.post(path, json={}, headers={"Authorization": "Bearer wrong-secret"})
         assert resp.status_code == 401
         assert resp.json()["code"] == "unauthorized"
 
-    @pytest.mark.parametrize("path", ["/validate", "/runs", "/canonicalize"])
+    @pytest.mark.parametrize("path", ["/validate", "/runs", "/canonicalize", "/rederive"])
     def test_non_bearer_scheme_is_401(self, client: TestClient, path: str) -> None:
         resp = client.post(path, json={}, headers={"Authorization": f"Basic {TEST_SECRET}"})
         assert resp.status_code == 401
 
-    @pytest.mark.parametrize("path", ["/validate", "/runs", "/canonicalize"])
+    @pytest.mark.parametrize("path", ["/validate", "/runs", "/canonicalize", "/rederive"])
     def test_non_ascii_token_is_401_not_500(self, client: TestClient, path: str) -> None:
         # A non-ASCII bearer token must fail closed as 401 — never crash the
         # constant-time compare (TypeError) into an unhandled 500. Sent as raw
@@ -354,5 +354,82 @@ class TestCanonicalize:
             "cells": [[100.0, 200.0], [300.0, 400.0]],
         }
         resp = client.post("/canonicalize", json={"triangle": duplicate}, headers=AUTH)
+        assert resp.status_code == 422
+        assert resp.json()["code"] == "bad_request"
+
+
+# --------------------------------------------------------------------------- #
+# Story 4.7: /rederive — replay a stored ResultSet from its Lineage           #
+# --------------------------------------------------------------------------- #
+
+
+def _rederive_body(run_id: str, triangle: Triangle, stored_result_set) -> dict:
+    return {
+        "runId": run_id,
+        "triangle": _triangle_payload(triangle),
+        "storedResultSet": stored_result_set.model_dump(mode="json", by_alias=True),
+    }
+
+
+class TestRederive:
+    def test_untouched_resultset_reproduces(self, client: TestClient) -> None:
+        stored = run_methods(TAYLOR_ASHE, CL_BF_MACK)
+        resp = client.post(
+            "/rederive", json=_rederive_body("run-1", TAYLOR_ASHE, stored), headers=AUTH
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["reproduced"] is True
+        assert body["triangleHashVerified"] is True
+        assert body["discrepancies"] == []
+        assert body["runId"] == "run-1"
+        assert body["tier"] in {"exact", "epsilon"}
+        assert body["schemaVersion"] == "1.0.0"
+
+    def test_tampered_resultset_surfaces_a_discrepancy(self, client: TestClient) -> None:
+        stored = run_methods(TAYLOR_ASHE, CL_BF_MACK)
+        m0 = stored.method_results[0]
+        o1 = m0.origin_results[1]
+        tampered_method = m0.model_copy(
+            update={
+                "origin_results": (
+                    (m0.origin_results[0], o1.model_copy(update={"ultimate": o1.ultimate + 500.0}))
+                    + m0.origin_results[2:]
+                )
+            }
+        )
+        tampered = stored.model_copy(
+            update={"method_results": (tampered_method,) + stored.method_results[1:]}
+        )
+        resp = client.post(
+            "/rederive", json=_rederive_body("run-1", TAYLOR_ASHE, tampered), headers=AUTH
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["reproduced"] is False
+        assert body["triangleHashVerified"] is True
+        assert len(body["discrepancies"]) == 1
+        disc = body["discrepancies"][0]
+        assert disc["method"] == "chain_ladder"
+        assert disc["field"] == "ultimate"
+        assert disc["stored"] > disc["rederived"]
+
+    def test_foreign_triangle_fails_chain_of_custody(self, client: TestClient) -> None:
+        stored = run_methods(TAYLOR_ASHE, CL_BF_MACK)
+        foreign = TAYLOR_ASHE.model_copy(update={"kind": "incurred"})
+        resp = client.post(
+            "/rederive", json=_rederive_body("run-1", foreign, stored), headers=AUTH
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["triangleHashVerified"] is False
+        assert body["reproduced"] is False
+        assert body["discrepancies"] == []
+
+    def test_empty_run_id_is_422_bad_request(self, client: TestClient) -> None:
+        stored = run_methods(TAYLOR_ASHE)
+        resp = client.post(
+            "/rederive", json=_rederive_body("", TAYLOR_ASHE, stored), headers=AUTH
+        )
         assert resp.status_code == 422
         assert resp.json()["code"] == "bad_request"

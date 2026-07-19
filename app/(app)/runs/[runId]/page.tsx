@@ -2,7 +2,7 @@
 
 import { useAuth } from "@clerk/nextjs";
 import { ConvexError } from "convex/values";
-import { useMutation, useQuery } from "convex/react";
+import { useAction, useMutation, useQuery } from "convex/react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useState } from "react";
@@ -47,6 +47,9 @@ export default function RunDetailPage() {
     orgId && run?.hasDiagnostics ? { workspaceId: orgId, runId } : "skip",
   );
   const retryRun = useMutation(api.runs.retryRun);
+  // Story 4.7: re-derivation is an action (it fetches the engine). It returns
+  // the ReDerivationReport to RunDetail, which holds it in local state.
+  const rederiveRun = useAction(api.runs.rederiveRun);
 
   const [retryError, setRetryError] = useState<string | null>(null);
 
@@ -57,6 +60,16 @@ export default function RunDetailPage() {
       await retryRun({ workspaceId: orgId, runId });
     } catch (err) {
       setRetryError(errorMessage(err));
+    }
+  }
+
+  async function onRederive() {
+    if (!orgId) throw new Error("No active Workspace.");
+    try {
+      return await rederiveRun({ workspaceId: orgId, runId });
+    } catch (err) {
+      // Surface a readable message; RunDetail renders it in the panel.
+      throw new Error(errorMessage(err));
     }
   }
 
@@ -94,6 +107,7 @@ export default function RunDetailPage() {
               resultSet={resultSet ?? null}
               diagnosticsBundle={diagnosticsBundle ?? null}
               onRetry={onRetry}
+              onRederive={onRederive}
             />
           </div>
         </>

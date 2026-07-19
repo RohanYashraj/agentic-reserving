@@ -7,6 +7,7 @@ import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
 import {
+  action,
   internalAction,
   internalMutation,
   internalQuery,
@@ -14,7 +15,11 @@ import {
   query,
 } from "./_generated/server";
 import { callEngine } from "./lib/engineClient";
-import type { DiagnosticsBundle, ResultSet } from "./lib/engineContract";
+import type {
+  DiagnosticsBundle,
+  ReDerivationReport,
+  ResultSet,
+} from "./lib/engineContract";
 import {
   diagnosticsBundleValidator,
   resultSetValidator,
@@ -602,5 +607,151 @@ export const retryRun = mutation({
     await ctx.db.patch(runId, { workflowId });
 
     return { runId, status: "queued" as const };
+  },
+});
+
+// --- Story 4.7: ResultSet re-derivation from Lineage (FR-6, NFR-6, AD-11) -----
+
+/**
+ * Ingredients for a re-derivation: the run's stored accepted Triangle, its
+ * stored ResultSet, and the frozen `triangleHash`. Internal (no guard — the
+ * trusted `rederiveRun` action is the only caller), BUT it re-checks tenancy
+ * anyway (returns the same RUN_NOT_FOUND for wrong-workspace and absent, so
+ * existence never leaks) because the action passes an attacker-controllable
+ * runId. Only a `complete` run carries a `resultSet` — a queued/running/failed
+ * run is RUN_NOT_REDERIVABLE.
+ */
+export const getRunForRederive = internalQuery({
+  args: { runId: v.id("runs"), workspaceId: v.string() },
+  handler: async (ctx, { runId, workspaceId }) => {
+    const run = await ctx.db.get(runId);
+    if (run === null || run.workspaceId !== workspaceId) {
+      throw new ConvexError({
+        code: "RUN_NOT_FOUND",
+        message: "That Run does not exist in this Workspace.",
+      });
+    }
+    if (run.status !== "complete" || run.resultSet === undefined) {
+      throw new ConvexError({
+        code: "RUN_NOT_REDERIVABLE",
+        message: "Only a completed Run with a stored ResultSet can be re-derived.",
+      });
+    }
+    const triangle = await ctx.db.get(run.triangleId);
+    if (triangle === null || triangle.acceptedTriangle === undefined) {
+      throw new ConvexError({
+        code: "TRIANGLE_NOT_FOUND",
+        message: "The Run's Triangle is missing its accepted content.",
+      });
+    }
+    return {
+      // Snake_case Triangle body — the exact /rederive `triangle` field.
+      triangle: triangle.acceptedTriangle,
+      // The stored ResultSet, verbatim — its Lineage is the re-derivation recipe.
+      storedResultSet: run.resultSet,
+      triangleHash: run.triangleHash,
+    };
+  },
+});
+
+/**
+ * Append the `run.rederived` audit entry (AD-6) — the SOLE durable record of a
+ * re-derivation (AC4). Deliberately does NOT patch the run row: the stored
+ * ResultSet is immutable and re-derivation is a read-only proof, so a run can be
+ * re-derived any number of times with no state drift (AC1). Lean payload — the
+ * verdict + counts, never reserve figures (AD-1). Guarded so a vanished /
+ * cross-tenant run no-ops.
+ */
+export const recordRederivation = internalMutation({
+  args: {
+    runId: v.id("runs"),
+    workspaceId: v.string(),
+    actor: v.string(),
+    reproduced: v.boolean(),
+    triangleHashVerified: v.boolean(),
+    tier: v.union(v.literal("exact"), v.literal("epsilon")),
+    discrepancyCount: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const run = await ctx.db.get(args.runId);
+    if (run === null || run.workspaceId !== args.workspaceId) return;
+    await appendAuditEntryInTransaction(ctx, {
+      workspaceId: args.workspaceId,
+      actor: args.actor,
+      eventType: "run.rederived",
+      runId: args.runId,
+      payload: {
+        runId: args.runId,
+        reproduced: args.reproduced,
+        triangleHashVerified: args.triangleHashVerified,
+        tier: args.tier,
+        discrepancyCount: args.discrepancyCount,
+      },
+    });
+  },
+});
+
+/**
+ * Re-derive a stored ResultSet from its Lineage on demand (FR-6, NFR-6) — the
+ * auditor's reproducibility proof (UJ-3). A public ACTION (it must `fetch` the
+ * engine): `requireMember` is its FIRST statement (AD-4) and runs BEFORE the
+ * engine call, so an unauthenticated / non-member caller is rejected without
+ * ever reaching the engine. Not `requireRole` — re-derivation writes no product
+ * state (only an audit entry), so any member may verify reproducibility;
+ * AD-4 reserves `requireRole(senior_actuary)` for the approve/publish/override
+ * MUTATION paths (see the story's flagged decision).
+ *
+ * The report is returned to the caller (the UI holds it in state; a re-run
+ * re-fetches) — never persisted on the run row (immutability, AC1). All
+ * comparison arithmetic lives in the engine (AD-1); this action carries the
+ * report, it computes nothing. Return type annotated to break internal.* cycles.
+ */
+export const rederiveRun = action({
+  args: { workspaceId: v.string(), runId: v.id("runs") },
+  handler: async (ctx, { workspaceId, runId }): Promise<ReDerivationReport> => {
+    // AD-4: identity + Workspace membership before anything else (before fetch).
+    const { identity } = await requireMember(ctx, workspaceId);
+    const actor = identity.subject;
+
+    // Tenancy re-check happens inside getRunForRederive (runId is
+    // attacker-controllable); it throws RUN_NOT_FOUND for wrong-workspace/absent.
+    const { triangle, storedResultSet, triangleHash } = await ctx.runQuery(
+      internal.runs.getRunForRederive,
+      { runId, workspaceId },
+    );
+
+    // Chain of custody, belt-and-braces (AD-11): the stored ResultSet's Lineage
+    // hash must match the run's frozen triangleHash before we even dispatch —
+    // mirrors storeResultSet's guard. The engine re-checks against the Triangle
+    // it actually re-runs (its authoritative check); this catches a Convex-side
+    // tamper before the round-trip.
+    if (storedResultSet.lineage.triangleHash !== triangleHash) {
+      throw new ConvexError({
+        code: "RESULT_HASH_MISMATCH",
+        message:
+          "The stored ResultSet's Triangle hash does not match the Run's Triangle hash.",
+      });
+    }
+
+    const report = await callEngine<ReDerivationReport>("/rederive", {
+      runId,
+      triangle,
+      storedResultSet,
+    });
+
+    // Audit the outcome (AC4) — only reached on a successful engine report; a
+    // down engine throws above (ENGINE_UNAVAILABLE) and is NOT recorded as a
+    // reproducibility verdict.
+    await ctx.runMutation(internal.runs.recordRederivation, {
+      runId,
+      workspaceId,
+      actor,
+      reproduced: report.reproduced,
+      triangleHashVerified: report.triangleHashVerified,
+      tier: report.tier,
+      discrepancyCount: report.discrepancies.length,
+    });
+
+    return report;
   },
 });

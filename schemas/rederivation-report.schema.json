@@ -1,0 +1,87 @@
+{
+  "$defs": {
+    "Discrepancy": {
+      "description": "One figure that did not reproduce: where it is, and by how much.\n\n``key`` locates the figure within its Method \u2014 an Origin Period label for\nper-origin figures, a ``\"{from_dev}\u2192{to_dev}\"`` transition for factors, or\n``\"\"`` for Method-level totals / structural counts. ``delta`` is the\nengine-computed ``stored \u2212 rederived`` (AD-1). A ``None`` figure (a Mack\nfield on a tampered CL/BF result, or a missing structural element) is\nreported as ``0.0`` on that side so the report stays all-float and JSON-clean.",
+      "properties": {
+        "delta": {
+          "title": "Delta",
+          "type": "number"
+        },
+        "field": {
+          "title": "Field",
+          "type": "string"
+        },
+        "key": {
+          "title": "Key",
+          "type": "string"
+        },
+        "method": {
+          "title": "Method",
+          "type": "string"
+        },
+        "rederived": {
+          "title": "Rederived",
+          "type": "number"
+        },
+        "stored": {
+          "title": "Stored",
+          "type": "number"
+        }
+      },
+      "required": [
+        "method",
+        "field",
+        "key",
+        "stored",
+        "rederived",
+        "delta"
+      ],
+      "title": "Discrepancy",
+      "type": "object"
+    }
+  },
+  "description": "The outcome of replaying a stored ResultSet from its Lineage.\n\n``reproduced`` is the top-line verdict: the Triangle hash verified **and**\nno figure discrepancies. ``triangle_hash_verified`` distinguishes the two\nfailure modes \u2014 a broken chain of custody (the stored Triangle no longer\nhashes to its Lineage) versus altered stored figures on an authentic\nTriangle. ``tier`` records which AD-11 comparison ran (``exact`` on the\npinned platform, ``epsilon`` elsewhere) so the surface can be honest about\nthe guarantee.",
+  "properties": {
+    "discrepancies": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/Discrepancy"
+      },
+      "title": "Discrepancies",
+      "type": "array"
+    },
+    "reproduced": {
+      "title": "Reproduced",
+      "type": "boolean"
+    },
+    "runId": {
+      "title": "Runid",
+      "type": "string"
+    },
+    "schemaVersion": {
+      "default": "1.0.0",
+      "title": "Schemaversion",
+      "type": "string"
+    },
+    "tier": {
+      "enum": [
+        "exact",
+        "epsilon"
+      ],
+      "title": "Tier",
+      "type": "string"
+    },
+    "triangleHashVerified": {
+      "title": "Trianglehashverified",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "runId",
+    "reproduced",
+    "triangleHashVerified",
+    "tier"
+  ],
+  "title": "ReDerivationReport",
+  "type": "object"
+}
