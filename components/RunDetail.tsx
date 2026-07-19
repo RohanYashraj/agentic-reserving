@@ -2,13 +2,18 @@
 
 import { useState, type ReactNode } from "react";
 
+import { DiagnosticsPanels } from "@/components/DiagnosticsPanels";
 import { ResultsGrid } from "@/components/ResultsGrid";
 import { StatusBadge } from "@/components/StatusBadge";
 import { StepRail, type RunStatus } from "@/components/StepRail";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { methodLabel } from "@/components/methods";
 import type { Id } from "@/convex/_generated/dataModel";
-import type { Method, ResultSet } from "@/convex/lib/engineContract";
+import type {
+  DiagnosticsBundle,
+  Method,
+  ResultSet,
+} from "@/convex/lib/engineContract";
 
 // Story 4.3 (AC2/3/4): the live Run-detail body. Status badge + per-Method
 // progress rows in an aria-live region + the golden-path step rail + four tabs
@@ -63,10 +68,12 @@ function TabPlaceholder({ children }: { children: ReactNode }) {
 export function RunDetail({
   run,
   resultSet,
+  diagnosticsBundle,
   onRetry,
 }: {
   run: RunView;
   resultSet?: ResultSet | null;
+  diagnosticsBundle?: DiagnosticsBundle | null;
   onRetry: () => Promise<void> | void;
 }) {
   const [tab, setTab] = useState<TabKey>("results");
@@ -170,11 +177,15 @@ export function RunDetail({
         </TabsContent>
 
         <TabsContent value="diagnostics">
-          <TabPlaceholder>
-            {run.hasDiagnostics
-              ? "Diagnostics render in a later story (4.5)."
-              : "Diagnostics appear once the Run completes."}
-          </TabPlaceholder>
+          {diagnosticsBundle ? (
+            <DiagnosticsPanels diagnosticsBundle={diagnosticsBundle} />
+          ) : (
+            <TabPlaceholder>
+              {run.hasDiagnostics
+                ? "Loading diagnostics…"
+                : "Diagnostics appear once the Run completes."}
+            </TabPlaceholder>
+          )}
         </TabsContent>
 
         <TabsContent value="interpretation">

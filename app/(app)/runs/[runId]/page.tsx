@@ -39,6 +39,13 @@ export default function RunDetailPage() {
     api.runs.getResultSet,
     orgId && run?.hasResults ? { workspaceId: orgId, runId } : "skip",
   );
+  // Third subscription: the DiagnosticsBundle. Gated on hasDiagnostics so no
+  // diagnostics are fetched before the Run completes (AC7); immutable-once-
+  // stored, so it settles immediately and never churns (Story 4.5).
+  const diagnosticsBundle = useQuery(
+    api.runs.getDiagnosticsBundle,
+    orgId && run?.hasDiagnostics ? { workspaceId: orgId, runId } : "skip",
+  );
   const retryRun = useMutation(api.runs.retryRun);
 
   const [retryError, setRetryError] = useState<string | null>(null);
@@ -85,6 +92,7 @@ export default function RunDetailPage() {
             <RunDetail
               run={run}
               resultSet={resultSet ?? null}
+              diagnosticsBundle={diagnosticsBundle ?? null}
               onRetry={onRetry}
             />
           </div>

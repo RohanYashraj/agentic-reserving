@@ -503,6 +503,33 @@ export const getResultSet = query({
 });
 
 /**
+ * The stored DiagnosticsBundle for one Run, verbatim — the Diagnostics read
+ * surface Story 4.3's `getRun` deferred alongside the figures ("the figures
+ * arrive in 4.4–4.6"). The exact structural twin of `getResultSet` (Story 4.4):
+ * `getRun` stays lean (no bundle), and the Diagnostics tab subscribes here ONLY
+ * when `hasDiagnostics` (Story 4.5).
+ *
+ * Public → requireMember first (AD-4); then the same tenancy re-check as
+ * `getRun`/`getResultSet` returns `null` for a row outside this Workspace
+ * (existence never leaks). Returns `run.diagnosticsBundle` UNCHANGED — no
+ * projection, no re-keying — so "every value is from the stored bundle
+ * verbatim" (AC5) holds by construction. A queued/running/failed Run has no
+ * `diagnosticsBundle` → `null`.
+ *
+ * AD-1: this query only READS and RETURNS engine-computed diagnostics; it
+ * performs no arithmetic. Display formatting is the React layer's job.
+ */
+export const getDiagnosticsBundle = query({
+  args: { workspaceId: v.string(), runId: v.id("runs") },
+  handler: async (ctx, { workspaceId, runId }) => {
+    await requireMember(ctx, workspaceId);
+    const run = await ctx.db.get(runId);
+    if (run === null || run.workspaceId !== workspaceId) return null;
+    return run.diagnosticsBundle ?? null;
+  },
+});
+
+/**
  * Idempotent "Retry run" (Story 4.3, AC4/6) — the one new status writer Story
  * 4.2 anticipated ("that's 4.3's idempotent 'Retry run' UI, which will re-enter
  * this same orchestration"). The runs record stays the sole status authority

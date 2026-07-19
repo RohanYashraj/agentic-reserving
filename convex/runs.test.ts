@@ -487,6 +487,65 @@ function makeDiagnosticsBundle(runId: string, triangleHash: string) {
   };
 }
 
+/**
+ * A POPULATED DiagnosticsBundle (≥1 element per kind, non-null clBfDivergence)
+ * so the getDiagnosticsBundle verbatim assertion actually exercises the nested
+ * arrays (linkRatios, residuals) rather than empty ones.
+ */
+function makePopulatedDiagnosticsBundle(runId: string, triangleHash: string) {
+  return {
+    schemaVersion: "1.0.0",
+    runId,
+    triangleHash,
+    ldfStability: [
+      {
+        id: `dx:${runId}:ldf_stability:12`,
+        fromDev: "12",
+        toDev: "24",
+        selectedFactor: 1.52,
+        linkRatios: [
+          { origin: "2019", factor: 1.48 },
+          { origin: "2020", factor: 1.55 },
+        ],
+        sigma: 0.12,
+        stdErr: 0.04,
+        cv: 0.08,
+      },
+    ],
+    ave: [
+      {
+        id: `dx:${runId}:ave:2019`,
+        origin: "2019",
+        fromDev: "12",
+        toDev: "24",
+        actual: 4213,
+        expected: 4371,
+        actualMinusExpected: -158,
+        actualToExpectedRatio: 0.9639,
+      },
+    ],
+    clBfDivergence: [
+      {
+        id: `dx:${runId}:cl_bf_divergence:2019`,
+        origin: "2019",
+        clUltimate: 4213,
+        bfUltimate: 4100,
+        divergence: 113,
+        relativeDivergence: 0.0276,
+      },
+    ],
+    residuals: [
+      {
+        id: `dx:${runId}:residual:2019:12`,
+        origin: "2019",
+        fromDev: "12",
+        toDev: "24",
+        residual: 1.1,
+      },
+    ],
+  };
+}
+
 /** Seed a `runs` row directly in the given status (no workflow kickoff). */
 async function seedRun(
   t: Harness,
@@ -1021,6 +1080,71 @@ describe("getResultSet — verbatim figure read surface (AC4, AC5)", () => {
       .query(api.runs.getResultSet, { workspaceId: "org_B", runId });
 
     expect(resultSet).toBeNull();
+  });
+});
+
+describe("getDiagnosticsBundle — verbatim diagnostics read surface (AC1, AC7)", () => {
+  test("complete run → the stored DiagnosticsBundle returned verbatim (no re-shaping)", async () => {
+    const t = initConvexTest();
+    const triangleId = await seedValidatedTriangle(t);
+    const bundle = makePopulatedDiagnosticsBundle("run_4_5", TRIANGLE_HASH);
+    // Seed a complete run carrying the POPULATED bundle (seedCompleteRun stores
+    // the empty placeholder one — this test needs the nested arrays present).
+    const runId = await t.run((ctx) =>
+      ctx.db.insert("runs", {
+        workspaceId: "org_A",
+        triangleId,
+        triangleHash: TRIANGLE_HASH,
+        status: "complete",
+        parameters: {
+          methods: ["chain_ladder", "bornhuetter_ferguson", "mack"],
+          aprioriLossRatios: [],
+        },
+        createdBy: "user_a",
+        createdAt: "2026-07-19T00:00:00.000Z",
+        resultSet: makeResultSet(TRIANGLE_HASH, ["chain_ladder", "mack"]),
+        diagnosticsBundle: bundle,
+        startedAt: "2026-07-19T00:00:01.000Z",
+        completedAt: "2026-07-19T00:00:02.000Z",
+      }),
+    );
+
+    const out = await t
+      .withIdentity(analystA)
+      .query(api.runs.getDiagnosticsBundle, { workspaceId: "org_A", runId });
+
+    // Deep-equal the exact stored bundle — nothing dropped or re-keyed (AC5
+    // verbatim: the query cannot introduce a derived number).
+    expect(out).toEqual(bundle);
+    // Spot-check the nested arrays survive (present, not stripped).
+    expect(out?.ldfStability[0].linkRatios).toHaveLength(2);
+    expect(out?.ave[0].actualMinusExpected).toBe(-158);
+    expect(out?.clBfDivergence?.[0].divergence).toBe(113);
+    expect(out?.residuals[0].residual).toBe(1.1);
+  });
+
+  test("queued / running / failed run → null (no diagnosticsBundle stored)", async () => {
+    const t = initConvexTest();
+    const triangleId = await seedValidatedTriangle(t);
+    for (const status of ["queued", "running", "failed"] as const) {
+      const runId = await seedRun(t, triangleId, status);
+      const out = await t
+        .withIdentity(analystA)
+        .query(api.runs.getDiagnosticsBundle, { workspaceId: "org_A", runId });
+      expect(out).toBeNull();
+    }
+  });
+
+  test("a complete run in another Workspace → null (existence never leaks)", async () => {
+    const t = initConvexTest();
+    const triangleId = await seedValidatedTriangle(t, "org_A");
+    const runId = await seedCompleteRun(t, triangleId);
+
+    const out = await t
+      .withIdentity(analystB)
+      .query(api.runs.getDiagnosticsBundle, { workspaceId: "org_B", runId });
+
+    expect(out).toBeNull();
   });
 });
 

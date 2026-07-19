@@ -73,10 +73,12 @@ const publicFunctionArgs: Record<string, Record<string, unknown>> = {
     workspaceId: "org_test",
     parameters: { methods: ["chain_ladder"], aprioriLossRatios: [] },
   },
-  // getRun/getResultSet/retryRun take a v.id("runs") validated before the guard
-  // runs — a real run row id is injected at call time (like createRun's triangleId).
+  // getRun/getResultSet/getDiagnosticsBundle/retryRun take a v.id("runs")
+  // validated before the guard runs — a real run row id is injected at call time
+  // (like createRun's triangleId).
   "runs:getRun": { workspaceId: "org_test" },
   "runs:getResultSet": { workspaceId: "org_test" },
+  "runs:getDiagnosticsBundle": { workspaceId: "org_test" },
   "runs:retryRun": { workspaceId: "org_test" },
 };
 
@@ -234,6 +236,7 @@ describe("auth-guard enumeration (NFR-3)", () => {
       if (
         path === "runs:getRun" ||
         path === "runs:getResultSet" ||
+        path === "runs:getDiagnosticsBundle" ||
         path === "runs:retryRun"
       ) {
         return { ...publicFunctionArgs[path], runId };

@@ -1,5 +1,5 @@
 # generated: 2026-07-16
-# last_updated: 2026-07-18
+# last_updated: 2026-07-19
 # project: agentic-reserving
 # project_key: NOKEY
 # tracking_system: file-system
@@ -76,7 +76,7 @@ development_status:
   4-2-durable-run-orchestration-and-resultset-persistence: review
   4-3-run-detail-with-step-rail-and-live-status: review
   4-4-results-tab-with-provenance-popover: review
-  4-5-diagnostics-review-panels: backlog
+  4-5-diagnostics-review-panels: review
   4-6-diagnostic-context-rail-and-deep-linking: backlog
   4-7-resultset-re-derivation-from-lineage: backlog
   epic-4-retrospective: optional

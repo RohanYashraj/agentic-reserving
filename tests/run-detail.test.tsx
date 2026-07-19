@@ -22,7 +22,10 @@ vi.mock("next/link", () => ({
 
 import { RunDetail, type RunView } from "@/components/RunDetail";
 import type { Id } from "@/convex/_generated/dataModel";
-import type { ResultSet } from "@/convex/lib/engineContract";
+import type {
+  DiagnosticsBundle,
+  ResultSet,
+} from "@/convex/lib/engineContract";
 
 afterEach(cleanup);
 
@@ -68,6 +71,57 @@ function makeResultSet(): ResultSet {
           },
         ],
         totalMackStdErr: null,
+      },
+    ],
+  };
+}
+
+function makeDiagnosticsBundle(): DiagnosticsBundle {
+  return {
+    schemaVersion: "1.0.0",
+    runId: "r1",
+    triangleHash: "a".repeat(64),
+    ldfStability: [
+      {
+        id: "dx:r1:ldf_stability:12",
+        fromDev: "12",
+        toDev: "24",
+        selectedFactor: 1.52,
+        linkRatios: [{ origin: "2019", factor: 1.48 }],
+        sigma: 0.12,
+        stdErr: 0.04,
+        cv: 0.08,
+      },
+    ],
+    ave: [
+      {
+        id: "dx:r1:ave:2019",
+        origin: "2019",
+        fromDev: "12",
+        toDev: "24",
+        actual: 4213,
+        expected: 4371,
+        actualMinusExpected: -158,
+        actualToExpectedRatio: 0.9639,
+      },
+    ],
+    clBfDivergence: [
+      {
+        id: "dx:r1:cl_bf_divergence:2019",
+        origin: "2019",
+        clUltimate: 4213,
+        bfUltimate: 4100,
+        divergence: 113,
+        relativeDivergence: 0.0276,
+      },
+    ],
+    residuals: [
+      {
+        id: "dx:r1:residual:2019:12",
+        origin: "2019",
+        fromDev: "12",
+        toDev: "24",
+        residual: 1.1,
       },
     ],
   };
@@ -133,9 +187,9 @@ describe("RunDetail (AC2, AC3, AC4)", () => {
 
     // The step rail's Diagnostics step (a button on a complete run) switches tabs.
     fireEvent.click(screen.getByRole("button", { name: "Diagnostics" }));
-    expect(
-      screen.getByText(/Diagnostics render in a later story/i),
-    ).toBeDefined();
+    // With the bundle not yet fetched it shows the brief loading state (not the
+    // obsolete "later story" text).
+    expect(screen.getByText(/Loading diagnostics/i)).toBeDefined();
   });
 
   it("complete run with a ResultSet renders the Results grid (AC1)", () => {
@@ -169,6 +223,59 @@ describe("RunDetail (AC2, AC3, AC4)", () => {
       />,
     );
     expect(screen.getByText(/Loading results/i)).toBeDefined();
+  });
+
+  it("complete run with a DiagnosticsBundle renders the panels (Story 4.5, AC2)", () => {
+    render(
+      <RunDetail
+        run={makeRun({
+          status: "complete",
+          hasResults: true,
+          hasDiagnostics: true,
+          completedAt: "2026-07-19T00:00:02.000Z",
+        })}
+        diagnosticsBundle={makeDiagnosticsBundle()}
+        onRetry={vi.fn()}
+      />,
+    );
+
+    // Switch to the Diagnostics tab; the panels render (a residual value + a
+    // Diagnostic ID present) with no Interpretation involvement.
+    fireEvent.click(screen.getByRole("button", { name: "Diagnostics" }));
+    expect(
+      screen.getByText(/Actual vs expected — latest diagonal/i),
+    ).toBeDefined();
+    expect(screen.getByText("1.10")).toBeDefined(); // residual, verbatim
+  });
+
+  it("hasDiagnostics but no bundle yet → loading placeholder, no panels", () => {
+    render(
+      <RunDetail
+        run={makeRun({ status: "complete", hasDiagnostics: true })}
+        diagnosticsBundle={null}
+        onRetry={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Diagnostics" }));
+    expect(screen.getByText(/Loading diagnostics/i)).toBeDefined();
+  });
+
+  it("Engine-Only Mode (simulated): Diagnostics render with no Interpretation props (AC7)", () => {
+    // Diagnostics depend ONLY on the engine-produced bundle — there are no
+    // interpretation/agent props to omit — so rendering the panels is proof
+    // they remain fully viewable when Interpretation is unavailable (NFR-2).
+    render(
+      <RunDetail
+        run={makeRun({ status: "complete", hasDiagnostics: true })}
+        diagnosticsBundle={makeDiagnosticsBundle()}
+        onRetry={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Diagnostics" }));
+    expect(
+      screen.getByText(/LDF stability by development period/i),
+    ).toBeDefined();
+    expect(screen.getByText(/Residual heatmap/i)).toBeDefined();
   });
 
   it("no polling primitive: the component has no interval/timeout-based refetch (FR-20)", () => {
