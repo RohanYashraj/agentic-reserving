@@ -5,12 +5,13 @@ import { useEffect, useState, type ReactNode } from "react";
 import { DiagnosticsPanels } from "@/components/DiagnosticsPanels";
 import { InterpretationTab } from "@/components/interpretation/InterpretationTab";
 import { RederivationPanel } from "@/components/RederivationPanel";
+import { ReportTab, type ReportSections } from "@/components/report/ReportTab";
 import { ResultsGrid } from "@/components/ResultsGrid";
 import { StatusBadge } from "@/components/StatusBadge";
 import { StepRail, type RunStatus } from "@/components/StepRail";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { methodLabel } from "@/components/methods";
-import type { Id } from "@/convex/_generated/dataModel";
+import type { Doc, Id } from "@/convex/_generated/dataModel";
 import type {
   DiagnosticsBundle,
   Method,
@@ -42,6 +43,9 @@ export type RunView = {
   // Story 5.5: gates the Interpretation tab (getRun returns it). A boolean —
   // NO figures leak (AD-1); the recommendations arrive via getRecommendations.
   hasRecommendations: boolean;
+  // Story 6.1: gates the Report tab's editor vs. creation state (getRun returns
+  // it, runs.ts:507). A boolean — the report itself arrives via getReserveReport.
+  hasReserveReport: boolean;
   // Story 5.6: the durable per-Run interpretation-failure state (getRun returns
   // it). Survives reload (D2); the reason enum + timestamp only, NO figures.
   interpretationFailure: {
@@ -83,9 +87,13 @@ export function RunDetail({
   resultSet,
   diagnosticsBundle,
   recommendations,
+  report,
   onRetry,
   onRederive,
   onGenerateInterpretation,
+  onEditReport,
+  onCreateManual,
+  onGenerateDraft,
   engineOnly = false,
 }: {
   run: RunView;
@@ -94,6 +102,10 @@ export function RunDetail({
   // Story 5.5: the interpretation read surface (getRecommendations) — feeds both
   // the Interpretation tab and the Diagnostics rail's "cited by N" backlink.
   recommendations?: Recommendations | null;
+  // Story 6.1: the Reserve Report read surface (getReserveReport) — feeds the
+  // Report tab editor and unions into the rail's "cited by N" tally. Optional so
+  // the surface degrades to the placeholder where unwired (pre-6.1 tests).
+  report?: Doc<"reserveReports"> | null;
   // Story 5.6: the workspace-global Engine-Only Mode flag (run-scoped mirror of
   // the global banner). Affects ONLY the Interpretation tab (disables its
   // trigger) — Upload/Results/Diagnostics stay fully functional (NFR-2 / AC-3).
@@ -108,6 +120,14 @@ export function RunDetail({
   onGenerateInterpretation?: () => Promise<{
     status: "accepted" | "rejected";
   }>;
+  // Story 6.1: the report edit / manual-create / generate-draft handlers. All
+  // optional — when unwired the Report tab degrades to the placeholder (6.3),
+  // mirroring how the Interpretation placeholder degrades.
+  onEditReport?: (
+    sections: ReportSections,
+  ) => Promise<{ contentVersion: number }>;
+  onCreateManual?: () => Promise<unknown>;
+  onGenerateDraft?: () => Promise<{ status: "accepted" | "rejected" }>;
 }) {
   const [tab, setTab] = useState<TabKey>("results");
   const [retrying, setRetrying] = useState(false);
@@ -297,6 +317,7 @@ export function RunDetail({
               runId={run._id}
               initialSelectedId={initialSelectedId}
               recommendations={recommendations ?? null}
+              report={report ?? null}
             />
           ) : (
             <TabPlaceholder>
@@ -324,9 +345,21 @@ export function RunDetail({
         </TabsContent>
 
         <TabsContent value="report">
-          <TabPlaceholder>
-            Report unlocks after Interpretation (Epic 6).
-          </TabPlaceholder>
+          {onEditReport && onCreateManual && onGenerateDraft ? (
+            <ReportTab
+              run={run}
+              report={report ?? null}
+              diagnosticsBundle={diagnosticsBundle ?? null}
+              engineOnly={engineOnly}
+              onEditReport={onEditReport}
+              onCreateManual={onCreateManual}
+              onGenerateDraft={onGenerateDraft}
+            />
+          ) : (
+            <TabPlaceholder>
+              Report unlocks after Interpretation (Epic 6).
+            </TabPlaceholder>
+          )}
         </TabsContent>
       </Tabs>
     </div>

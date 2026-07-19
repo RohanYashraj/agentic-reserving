@@ -7,6 +7,7 @@ import {
   type ResolvedDiagnostic,
 } from "@/components/diagnostics/resolveDiagnostic";
 import { useDiagnosticSelection } from "@/components/diagnostics/selection";
+import type { Doc } from "@/convex/_generated/dataModel";
 import type {
   DiagnosticsBundle,
   Recommendations,
@@ -37,8 +38,9 @@ import {
  * AC3/D4). N = the number of `RecommendationReason`s across all Origin Periods
  * whose `citations[]` include `id`. This reads only citation-id lists (opaque
  * strings) — citation-METADATA aggregation, NOT reserve arithmetic (AD-1 clean).
- * When Epic 6 renders/persists Reserve Report sections, the count extends to
- * union the report's section citations into the same tally.
+ * Story 6.1 (D9) unions the Reserve Report's per-section citations into the same
+ * tally (see `countReportCitations`) — a Diagnostic cited by a report section
+ * now increments its "cited by N" backlink, closing 5.5's documented deferral.
  */
 function countCitingClaims(
   recommendations: Recommendations,
@@ -49,6 +51,30 @@ function countCitingClaims(
     for (const reason of rec.reasons) {
       if (reason.citations.includes(id)) n++;
     }
+  }
+  return n;
+}
+
+/**
+ * Count the Reserve Report SECTIONS whose `citations[]` include a given
+ * Diagnostic ID (Story 6.1, D9). One per section that cites it — the report-plane
+ * twin of `countCitingClaims`'s per-reason granularity. Citation-METADATA
+ * aggregation over opaque id lists, NOT reserve arithmetic (AD-1 clean).
+ */
+function countReportCitations(
+  report: Doc<"reserveReports">,
+  id: string,
+): number {
+  const doc = report.report;
+  const sections = [
+    doc.executiveSummary,
+    doc.methodSelectionRationale,
+    doc.movementCommentary,
+    doc.limitations,
+  ];
+  let n = 0;
+  for (const section of sections) {
+    if (section.citations.includes(id)) n++;
   }
   return n;
 }
@@ -157,12 +183,16 @@ export function DiagnosticContextRail({
   diagnosticsBundle,
   runId,
   recommendations,
+  report,
 }: {
   diagnosticsBundle: DiagnosticsBundle;
   runId: string;
   // Story 5.5 (AC3): the interpretation-claims citation source. null until an
   // Interpretation exists — then the "Cited by N report claims" backlink lights up.
   recommendations?: Recommendations | null;
+  // Story 6.1 (D9): the Reserve Report — its section citations union into the
+  // same tally. null until a report exists.
+  report?: Doc<"reserveReports"> | null;
 }) {
   const { selectedId, clear } = useDiagnosticSelection();
   const resolved = selectedId
@@ -213,22 +243,24 @@ export function DiagnosticContextRail({
             <Detail resolved={resolved} />
           </div>
 
-          {/* Cited by (Story 5.5, AC3/D4) — the honest-empty shell 4.6 left now
-              lights up with the real count. "report claims" = interpretation
-              claims from the recommendations document (the citations source 5.5
-              subscribes to); Epic 6 unions the Reserve Report's section citations
-              into the same count. The "→ view in draft" navigation is deferred
-              (the draft isn't rendered in 5.5) — 5.5 ships the count only. */}
+          {/* Cited by (Story 5.5 AC3/D4, Story 6.1 D9) — "report claims" now
+              unions BOTH interpretation claims (recommendation reasons) AND
+              Reserve Report section citations. The "→ view in draft" navigation
+              stays deferred (deferred-work §6.1) — 6.1 ships the honest count. */}
           <div className="border-t border-border pt-3">
             <h4 className="text-sm font-medium">Cited by</h4>
-            {recommendations == null ? (
+            {recommendations == null && report == null ? (
               <p className="mt-1 text-xs text-muted-foreground">
                 Cited by 0 report claims. Backlinks appear once Interpretation
                 exists.
               </p>
             ) : (
               (() => {
-                const n = countCitingClaims(recommendations, resolved.el.id);
+                const n =
+                  (recommendations
+                    ? countCitingClaims(recommendations, resolved.el.id)
+                    : 0) +
+                  (report ? countReportCitations(report, resolved.el.id) : 0);
                 return (
                   <p className="mt-1 text-xs text-muted-foreground">
                     Cited by {n} report {n === 1 ? "claim" : "claims"}.

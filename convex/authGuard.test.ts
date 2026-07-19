@@ -91,6 +91,20 @@ const publicFunctionArgs: Record<string, Record<string, unknown>> = {
   // generateReserveReport (Story 5.4) is a public ACTION; requireMember is its
   // first statement, so an unauthenticated call is rejected before the engine call.
   "runs:generateReserveReport": { workspaceId: "org_test" },
+  // Story 6.1 — the two new public report mutations. Both take a v.id("runs")
+  // validated before the guard runs (real runId injected below); editReserveReport
+  // also validates its `sections` object before the guard, so supply the four
+  // empty section texts here. requireMember is the first statement of each (AD-4).
+  "runs:editReserveReport": {
+    workspaceId: "org_test",
+    sections: {
+      executiveSummary: "",
+      methodSelectionRationale: "",
+      movementCommentary: "",
+      limitations: "",
+    },
+  },
+  "runs:createManualReport": { workspaceId: "org_test" },
   // Story 5.6 — the two new public Engine-Only Mode functions. getInterpretationMode
   // is a query, probeInterpretationMode is an ACTION; each has requireMember as its
   // first statement (AD-4). Neither takes a v.id("runs"), so no runId injection.
@@ -258,7 +272,9 @@ describe("auth-guard enumeration (NFR-3)", () => {
         path === "runs:retryRun" ||
         path === "runs:rederiveRun" ||
         path === "runs:generateRecommendations" ||
-        path === "runs:generateReserveReport"
+        path === "runs:generateReserveReport" ||
+        path === "runs:editReserveReport" ||
+        path === "runs:createManualReport"
       ) {
         return { ...publicFunctionArgs[path], runId };
       }

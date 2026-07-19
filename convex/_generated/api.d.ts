@@ -12,6 +12,7 @@ import type * as auditLogs from "../auditLogs.js";
 import type * as http from "../http.js";
 import type * as interpretationMode from "../interpretationMode.js";
 import type * as lib_auditChain from "../lib/auditChain.js";
+import type * as lib_citationMarker from "../lib/citationMarker.js";
 import type * as lib_clerkWebhook from "../lib/clerkWebhook.js";
 import type * as lib_engineClient from "../lib/engineClient.js";
 import type * as lib_engineContract from "../lib/engineContract.js";
@@ -34,6 +35,7 @@ declare const fullApi: ApiFromModules<{
   http: typeof http;
   interpretationMode: typeof interpretationMode;
   "lib/auditChain": typeof lib_auditChain;
+  "lib/citationMarker": typeof lib_citationMarker;
   "lib/clerkWebhook": typeof lib_clerkWebhook;
   "lib/engineClient": typeof lib_engineClient;
   "lib/engineContract": typeof lib_engineContract;

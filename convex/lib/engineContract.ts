@@ -242,6 +242,16 @@ export const reserveReportValidator = v.object({
   limitations: reserveReportSectionValidator,
 });
 
+/**
+ * The current Reserve Report document `schemaVersion` (AD-10). The machine path
+ * gets this string from the engine on the accepted document; the Story 6.1
+ * MANUAL path (`createManualReport`) has no engine, so it stamps this constant
+ * instead of a divergent literal. Keep it in lockstep with the engine default
+ * (`schemas/reserve-report.schema.json` → `schemaVersion.default`, drift-checked
+ * in `tests/engine-contract.test.ts`).
+ */
+export const RESERVE_REPORT_SCHEMA_VERSION = "1.0.0";
+
 // --- Triangle (the /validate + /runs request body) -----------------------
 
 /**

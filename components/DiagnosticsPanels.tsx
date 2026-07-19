@@ -11,6 +11,7 @@ import {
   DiagnosticSelectionProvider,
   useDiagnosticSelection,
 } from "@/components/diagnostics/selection";
+import type { Doc } from "@/convex/_generated/dataModel";
 import type {
   DiagnosticsBundle,
   Recommendations,
@@ -39,6 +40,7 @@ function DiagnosticsPanelsInner({
   runId,
   initialSelectedId,
   recommendations,
+  report,
 }: {
   diagnosticsBundle: DiagnosticsBundle;
   runId: string;
@@ -46,6 +48,8 @@ function DiagnosticsPanelsInner({
   // Story 5.5 (AC3): the interpretation-claims citation source for the rail's
   // "cited by N report claims" backlink. null until an Interpretation exists.
   recommendations?: Recommendations | null;
+  // Story 6.1 (D9): the Reserve Report — its section citations union into the tally.
+  report?: Doc<"reserveReports"> | null;
 }) {
   const { selectedId, select } = useDiagnosticSelection();
   const { ldfStability, ave, clBfDivergence, residuals } = diagnosticsBundle;
@@ -106,6 +110,7 @@ function DiagnosticsPanelsInner({
           diagnosticsBundle={diagnosticsBundle}
           runId={runId}
           recommendations={recommendations}
+          report={report}
         />
       </aside>
     </div>
@@ -117,11 +122,13 @@ export function DiagnosticsPanels({
   runId,
   initialSelectedId,
   recommendations,
+  report,
 }: {
   diagnosticsBundle: DiagnosticsBundle;
   runId: string;
   initialSelectedId?: string | null;
   recommendations?: Recommendations | null;
+  report?: Doc<"reserveReports"> | null;
 }) {
   return (
     <DiagnosticSelectionProvider>
@@ -130,6 +137,7 @@ export function DiagnosticsPanels({
         runId={runId}
         initialSelectedId={initialSelectedId}
         recommendations={recommendations}
+        report={report}
       />
     </DiagnosticSelectionProvider>
   );

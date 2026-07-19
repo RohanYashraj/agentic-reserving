@@ -178,20 +178,52 @@ export default defineSchema({
   // independent lifecycle (draft → awaiting review → published, Epic 6.2/6.4),
   // immutable published versions + "start new version" superseding records
   // (Epic 6.4, FR-13), and human-edit content versioning (Epic 6.1) — none of
-  // which fit an inline optional on `runs`. Ship it LEAN: `status` is a single
-  // `draft` literal (Epic 6 extends the union so a schema-invalid status can't
-  // be written); no versioning columns yet (Epic 6 owns them); one row per run
-  // that a re-draft overwrites. `report` is typed by `reserveReportValidator`,
-  // so a schema-invalid document THROWS at the mutation boundary and is never
-  // stored (AD-10).
+  // which fit an inline optional on `runs`. `report` is typed by
+  // `reserveReportValidator`, so a schema-invalid document THROWS at the mutation
+  // boundary and is never stored (AD-10).
+  //
+  // Story 6.1 extends this table with the human-edit lifecycle the 5.4 comment
+  // reserved: (a) `status` grows to the full lifecycle union so the edit
+  // immutability guard (`REPORT_NOT_EDITABLE` off a non-`draft` row) is real and
+  // testable now — 6.1 WRITES only `draft` (manual create → draft; edit keeps
+  // draft); `awaiting_review` (6.2) and `published` (6.4) are those stories'.
+  // (b) The content-versioning + human-ownership columns `contentVersion`
+  // /`updatedBy`/`updatedAt` — `contentVersion` is the IN-PLACE edit counter
+  // (starts 1 at machine draft / manual create, +1 per human edit) the approver
+  // signs (AD-5/FR-13); distinct from Epic 6.4's "start new version" supersession
+  // (a NEW row, FR-13). `machineDrafted` flips false on the first human edit —
+  // the current version is now human-owned (AD-5). These are PRODUCT-PLANE
+  // columns on the Convex table, NOT part of the drift-checked `report` document
+  // (AD-10) — so the engine contract is untouched. The three new fields are
+  // REQUIRED (not optional): the table is Epic-6-fresh (5.4's
+  // `generateReserveReport` was never wired to any UI before 6.1 — D6 — so no
+  // machine-draft rows exist), and `storeReserveReport` now writes them on the
+  // machine path too, so every row is valid under this schema. NOTE: if a stray
+  // pre-6.1 dev row exists it must be cleared once (documented, deferred-work
+  // §6.1); no supersession columns are added here (Epic 6.4 owns those).
   reserveReports: defineTable({
     workspaceId: v.string(), // Clerk org ID — the Workspace (AD-4 scoping)
     runId: v.id("runs"), // the Run this report interprets
-    status: v.union(v.literal("draft")), // 5.4 writes only "draft"; Epic 6 adds awaiting_review/published
-    machineDrafted: v.boolean(), // AC-3 provenance marker (true for the agent path)
+    // Full lifecycle union (6.1). 6.1 writes only "draft"; the two extra
+    // literals make the edit-immutability guard + AC-2 "no one edits a published
+    // report" a real test (seed a `published` row → the edit is rejected).
+    status: v.union(
+      v.literal("draft"),
+      v.literal("awaiting_review"),
+      v.literal("published"),
+    ),
+    // AC-3 provenance marker: true while purely machine-drafted, false after any
+    // human edit (the current version is human-owned — D4/AD-5).
+    machineDrafted: v.boolean(),
     report: reserveReportValidator, // the four gated sections (typed by the engine contract, AD-10)
-    createdBy: v.string(), // Clerk user id (identity.subject) who triggered drafting
+    // In-place human-edit counter (6.1, D4): 1 at machine draft / manual create,
+    // +1 on every human edit. The "content version" the approver signs
+    // (AD-5/FR-13). NOT Epic 6.4's superseding-version record.
+    contentVersion: v.number(),
+    createdBy: v.string(), // Clerk user id (identity.subject) who first created the row
     createdAt: v.string(), // ISO-8601 UTC
+    updatedBy: v.string(), // Clerk user id of the last writer (machine actor or human editor)
+    updatedAt: v.string(), // ISO-8601 UTC of the last write
   })
     // One report per run in 5.4 (re-draft overwrites); Epic 6 versions.
     .index("by_run", ["runId"])

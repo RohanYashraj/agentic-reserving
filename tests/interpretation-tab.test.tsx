@@ -27,6 +27,7 @@ function makeRun(overrides: Partial<RunView> = {}): RunView {
     hasResults: true,
     hasDiagnostics: true,
     hasRecommendations: false,
+    hasReserveReport: false,
     interpretationFailure: null,
     ...overrides,
   };

@@ -63,6 +63,15 @@ export default function RunDetailPage() {
     api.interpretationMode.getInterpretationMode,
     orgId ? { workspaceId: orgId } : "skip",
   );
+  // Sixth subscription (Story 6.1): the Reserve Report row. Gated on
+  // hasReserveReport exactly like getRecommendations gates on hasRecommendations
+  // — nothing is fetched before a report exists. When editReserveReport /
+  // createManualReport patch/insert the row the boolean flips and the editor
+  // populates reactively (FR-20, no polling; survives reload).
+  const report = useQuery(
+    api.runs.getReserveReport,
+    orgId && run?.hasReserveReport ? { workspaceId: orgId, runId } : "skip",
+  );
   const retryRun = useMutation(api.runs.retryRun);
   // Story 4.7: re-derivation is an action (it fetches the engine). It returns
   // the ReDerivationReport to RunDetail, which holds it in local state.
@@ -71,6 +80,12 @@ export default function RunDetailPage() {
   // pending state drives the transient "Reading diagnostics…". The durable
   // outcome is the getRecommendations subscription above.
   const generateRecommendations = useAction(api.runs.generateRecommendations);
+  // Story 6.1: the report edit + manual-create mutations and the 5.4 draft
+  // action (6.1 is its first UI caller, D6). The durable outcomes are the
+  // getReserveReport subscription above.
+  const editReserveReport = useMutation(api.runs.editReserveReport);
+  const createManualReport = useMutation(api.runs.createManualReport);
+  const generateReserveReport = useAction(api.runs.generateReserveReport);
 
   const [retryError, setRetryError] = useState<string | null>(null);
 
@@ -101,6 +116,41 @@ export default function RunDetailPage() {
       // clean value the tab renders as the quiet failure. model_unavailable /
       // transient errors throw and surface inline (the Engine-Only banner is 5.6).
       return await generateRecommendations({ workspaceId: orgId, runId });
+    } catch (err) {
+      throw new Error(errorMessage(err));
+    }
+  }
+
+  async function onEditReport(sections: {
+    executiveSummary: string;
+    methodSelectionRationale: string;
+    movementCommentary: string;
+    limitations: string;
+  }) {
+    if (!orgId) throw new Error("No active Workspace.");
+    try {
+      return await editReserveReport({ workspaceId: orgId, runId, sections });
+    } catch (err) {
+      throw new Error(errorMessage(err));
+    }
+  }
+
+  async function onCreateManual() {
+    if (!orgId) throw new Error("No active Workspace.");
+    try {
+      return await createManualReport({ workspaceId: orgId, runId });
+    } catch (err) {
+      throw new Error(errorMessage(err));
+    }
+  }
+
+  async function onGenerateDraft() {
+    if (!orgId) throw new Error("No active Workspace.");
+    try {
+      // Returns { status: "accepted" | "rejected" }; a rejected outcome is a
+      // clean value the tab renders as the quiet failure. A model_unavailable
+      // error flips the global Engine-Only banner via the 5.6 action wiring.
+      return await generateReserveReport({ workspaceId: orgId, runId });
     } catch (err) {
       throw new Error(errorMessage(err));
     }
@@ -140,10 +190,14 @@ export default function RunDetailPage() {
               resultSet={resultSet ?? null}
               diagnosticsBundle={diagnosticsBundle ?? null}
               recommendations={recommendations ?? null}
+              report={report ?? null}
               engineOnly={mode?.engineOnly ?? false}
               onRetry={onRetry}
               onRederive={onRederive}
               onGenerateInterpretation={onGenerateInterpretation}
+              onEditReport={onEditReport}
+              onCreateManual={onCreateManual}
+              onGenerateDraft={onGenerateDraft}
             />
           </div>
         </>

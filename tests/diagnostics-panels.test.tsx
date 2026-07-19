@@ -9,6 +9,7 @@ import {
 import { afterEach, describe, expect, it } from "vitest";
 
 import { DiagnosticsPanels } from "@/components/DiagnosticsPanels";
+import type { Doc, Id } from "@/convex/_generated/dataModel";
 import type {
   DiagnosticsBundle,
   Recommendations,
@@ -369,6 +370,94 @@ describe("DiagnosticContextRail + selection (Story 4.6)", () => {
         railOf(container).getByText(
           /Cited by 0 report claims\. Backlinks appear once Interpretation exists\./i,
         ),
+      ).toBeDefined();
+    });
+  });
+
+  // Story 6.1 (D9): the tally unions the Reserve Report's section citations.
+  describe('"cited by" unions report-section citations', () => {
+    function makeRecommendations(citations: string[][]): Recommendations {
+      return {
+        schemaVersion: "1.0.0",
+        runId: "r1",
+        recommendations: [
+          {
+            origin: "2019",
+            method: "chain_ladder",
+            reasons: citations.map((c) => ({ text: "reason", citations: c })),
+          },
+        ],
+      };
+    }
+
+    function makeReportRow(sectionCitations: string[]): Doc<"reserveReports"> {
+      const section = (citations: string[] = []) => ({ text: "prose", citations });
+      return {
+        _id: "rep1" as Id<"reserveReports">,
+        _creationTime: 0,
+        workspaceId: "org_A",
+        runId: "r1" as Id<"runs">,
+        status: "draft",
+        machineDrafted: false,
+        contentVersion: 1,
+        createdBy: "u",
+        createdAt: "2026-07-19T00:00:00.000Z",
+        updatedBy: "u",
+        updatedAt: "2026-07-19T00:00:00.000Z",
+        report: {
+          schemaVersion: "1.0.0",
+          runId: "r1",
+          machineDrafted: false,
+          executiveSummary: section(sectionCitations),
+          methodSelectionRationale: section(),
+          movementCommentary: section(),
+          limitations: section(),
+        },
+      };
+    }
+
+    it("a report section citing the id (no recommendation) → 'Cited by 1 report claim.'", () => {
+      const { container } = render(
+        <DiagnosticsPanels
+          diagnosticsBundle={fixture()}
+          runId="r1"
+          recommendations={null}
+          report={makeReportRow(["dx:r1:ave:2019"])}
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "dx:r1:ave:2019" }));
+      expect(
+        railOf(container).getByText("Cited by 1 report claim."),
+      ).toBeDefined();
+    });
+
+    it("a diagnostic cited by BOTH a recommendation and a report section counts both", () => {
+      const { container } = render(
+        <DiagnosticsPanels
+          diagnosticsBundle={fixture()}
+          runId="r1"
+          recommendations={makeRecommendations([["dx:r1:ave:2019"]])}
+          report={makeReportRow(["dx:r1:ave:2019"])}
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "dx:r1:ave:2019" }));
+      expect(
+        railOf(container).getByText("Cited by 2 report claims."),
+      ).toBeDefined();
+    });
+
+    it("report={null} falls back to the recommendation-only count (unchanged 5.5)", () => {
+      const { container } = render(
+        <DiagnosticsPanels
+          diagnosticsBundle={fixture()}
+          runId="r1"
+          recommendations={makeRecommendations([["dx:r1:ave:2019"]])}
+          report={null}
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "dx:r1:ave:2019" }));
+      expect(
+        railOf(container).getByText("Cited by 1 report claim."),
       ).toBeDefined();
     });
   });

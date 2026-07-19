@@ -52,6 +52,7 @@ last_updated: 2026-07-19
 # 2026-07-19: 5-4 → ready-for-dev (create-story) → in-progress → review (dev-story)
 # 2026-07-19: 5-5 → ready-for-dev (create-story) → in-progress → review (dev-story)
 # 2026-07-19: 5-6 → in-progress → review (dev-story)
+# 2026-07-19: epic-6 → in-progress; 6-1 → ready-for-dev (create-story) → in-progress → review (dev-story)
 project: agentic-reserving
 project_key: NOKEY
 tracking_system: file-system
@@ -100,8 +101,8 @@ development_status:
   5-6-engine-only-mode-fail-closed-degradation: done
   epic-5-retrospective: optional
 
-  epic-6: backlog
-  6-1-report-editor-with-atomic-citation-chips-and-manual-template: backlog
+  epic-6: in-progress
+  6-1-report-editor-with-atomic-citation-chips-and-manual-template: review
   6-2-submit-for-review-with-draft-lock: backlog
   6-3-recommendation-override-by-senior-actuary: backlog
   6-4-approve-and-publish: backlog

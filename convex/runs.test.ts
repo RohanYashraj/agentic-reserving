@@ -2019,6 +2019,61 @@ describe("storeReserveReport — persistence + audit + upsert (AC-2, AC-3)", () 
     expect((await auditRows(t)).filter((a) => a.eventType === "report.drafted")).toHaveLength(2);
   });
 
+  test("writes the 6.1 columns (contentVersion:1, updatedBy/updatedAt) on the machine path", async () => {
+    const t = initConvexTest();
+    const runId = await seedInterpretableRun(t);
+    await t.mutation(internal.runs.storeReserveReport, {
+      runId,
+      workspaceId: "org_A",
+      actor: "user_a",
+      report: makeReserveReport(runId),
+      transcript: SAMPLE_ATTEMPTS,
+    });
+    const rows = await reserveReportRows(t);
+    expect(rows[0].contentVersion).toBe(1);
+    expect(rows[0].updatedBy).toBe("user_a");
+    expect(typeof rows[0].updatedAt).toBe("string");
+  });
+
+  test("a re-draft over a HUMAN-EDITED row throws REPORT_ALREADY_EDITED (never clobbers edits)", async () => {
+    const t = initConvexTest();
+    const runId = await seedInterpretableRun(t);
+    // Machine draft, then a human edit flips machineDrafted → false.
+    await t.mutation(internal.runs.storeReserveReport, {
+      runId,
+      workspaceId: "org_A",
+      actor: "user_a",
+      report: makeReserveReport(runId),
+      transcript: SAMPLE_ATTEMPTS,
+    });
+    await t.withIdentity(analystA).mutation(api.runs.editReserveReport, {
+      workspaceId: "org_A",
+      runId,
+      sections: {
+        executiveSummary: "Human wording.",
+        methodSelectionRationale: "",
+        movementCommentary: "",
+        limitations: "",
+      },
+    });
+    // A machine re-draft must NOT discard the human content.
+    let code: string | undefined;
+    try {
+      await t.mutation(internal.runs.storeReserveReport, {
+        runId,
+        workspaceId: "org_A",
+        actor: "user_a",
+        report: makeReserveReport(runId),
+        transcript: SAMPLE_ATTEMPTS,
+      });
+    } catch (error) {
+      code = (error as ConvexError<{ code: string }>).data.code;
+    }
+    expect(code).toBe("REPORT_ALREADY_EDITED");
+    const rows = await reserveReportRows(t);
+    expect(rows[0].report.executiveSummary.text).toBe("Human wording.");
+  });
+
   test("no-op on a non-complete run (guarded)", async () => {
     const t = initConvexTest();
     const triangleId = await seedValidatedTriangle(t);
@@ -2285,6 +2340,336 @@ describe("generateReserveReport action — persist / audit / fail-closed (AC-2, 
     }
     expect(code).toBe("UNAUTHENTICATED");
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+// --- Story 6.1: Report editing + manual template shell (AC-1, AC-2) ----------
+
+/** Insert a `reserveReports` row directly at a given lifecycle status. */
+async function seedReportRow(
+  t: Harness,
+  runId: Id<"runs">,
+  status: "draft" | "awaiting_review" | "published",
+  { workspaceId = "org_A", machineDrafted = false } = {},
+) {
+  return await t.run((ctx) =>
+    ctx.db.insert("reserveReports", {
+      workspaceId,
+      runId,
+      status,
+      machineDrafted,
+      report: makeReserveReport(runId as string),
+      contentVersion: 1,
+      createdBy: "user_seed",
+      createdAt: "2026-07-18T00:00:00.000Z",
+      updatedBy: "user_seed",
+      updatedAt: "2026-07-18T00:00:00.000Z",
+    }),
+  );
+}
+
+describe("createManualReport — manual template shell (AC-2, AD-9)", () => {
+  test("inserts a draft (machineDrafted:false, v1, empty sections) + audits report.manualCreated", async () => {
+    const t = initConvexTest();
+    const triangleId = await seedValidatedTriangle(t);
+    const runId = await seedRun(t, triangleId, "complete");
+
+    const reportId = await t
+      .withIdentity(analystA)
+      .mutation(api.runs.createManualReport, { workspaceId: "org_A", runId });
+    expect(reportId).toBeDefined();
+
+    const rows = await reserveReportRows(t);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].status).toBe("draft");
+    expect(rows[0].machineDrafted).toBe(false);
+    expect(rows[0].contentVersion).toBe(1);
+    expect(rows[0].report.schemaVersion).toBe("1.0.0");
+    expect(rows[0].report.runId).toBe(runId);
+    expect(rows[0].report.machineDrafted).toBe(false);
+    for (const key of [
+      "executiveSummary",
+      "methodSelectionRationale",
+      "movementCommentary",
+      "limitations",
+    ] as const) {
+      expect(rows[0].report[key]).toEqual({ text: "", citations: [] });
+    }
+    expect(rows[0].createdBy).toBe("user_a");
+    expect(rows[0].updatedBy).toBe("user_a");
+
+    const audits = (await auditRows(t)).filter(
+      (a) => a.eventType === "report.manualCreated",
+    );
+    expect(audits).toHaveLength(1);
+    expect(audits[0].payload).toMatchObject({ runId });
+  });
+
+  test("works with a run lacking results/diagnostics/recommendations (Engine-Only, AD-9)", async () => {
+    const t = initConvexTest();
+    // A bare complete run — NO resultSet / diagnostics / recommendations.
+    const triangleId = await seedValidatedTriangle(t);
+    const runId = await seedRun(t, triangleId, "complete");
+    const reportId = await t
+      .withIdentity(analystA)
+      .mutation(api.runs.createManualReport, { workspaceId: "org_A", runId });
+    expect(reportId).toBeDefined();
+    expect(await reserveReportRows(t)).toHaveLength(1);
+  });
+
+  test("a second call throws REPORT_ALREADY_EXISTS (idempotent, no duplicate)", async () => {
+    const t = initConvexTest();
+    const triangleId = await seedValidatedTriangle(t);
+    const runId = await seedRun(t, triangleId, "complete");
+    await t
+      .withIdentity(analystA)
+      .mutation(api.runs.createManualReport, { workspaceId: "org_A", runId });
+
+    let code: string | undefined;
+    try {
+      await t
+        .withIdentity(analystA)
+        .mutation(api.runs.createManualReport, { workspaceId: "org_A", runId });
+    } catch (error) {
+      code = (error as ConvexError<{ code: string }>).data.code;
+    }
+    expect(code).toBe("REPORT_ALREADY_EXISTS");
+    expect(await reserveReportRows(t)).toHaveLength(1);
+  });
+
+  test("a cross-tenant / vanished run throws RUN_NOT_FOUND (no existence leak)", async () => {
+    const t = initConvexTest();
+    const triangleId = await seedValidatedTriangle(t);
+    const runId = await seedRun(t, triangleId, "complete"); // in org_A
+    let code: string | undefined;
+    try {
+      await t
+        .withIdentity(analystB)
+        .mutation(api.runs.createManualReport, { workspaceId: "org_B", runId });
+    } catch (error) {
+      code = (error as ConvexError<{ code: string }>).data.code;
+    }
+    expect(code).toBe("RUN_NOT_FOUND");
+    expect(await reserveReportRows(t)).toHaveLength(0);
+  });
+
+  test("unauthenticated is rejected (AD-4)", async () => {
+    const t = initConvexTest();
+    const triangleId = await seedValidatedTriangle(t);
+    const runId = await seedRun(t, triangleId, "complete");
+    let code: string | undefined;
+    try {
+      await t.mutation(api.runs.createManualReport, {
+        workspaceId: "org_A",
+        runId,
+      });
+    } catch (error) {
+      code = (error as ConvexError<{ code: string }>).data.code;
+    }
+    expect(code).toBe("UNAUTHENTICATED");
+    expect(await reserveReportRows(t)).toHaveLength(0);
+  });
+});
+
+describe("editReserveReport — human edit, re-derivation, versioning (AC-1, AC-2)", () => {
+  async function seedMachineDraft(t: Harness, runId: Id<"runs">) {
+    await t.mutation(internal.runs.storeReserveReport, {
+      runId,
+      workspaceId: "org_A",
+      actor: "user_seed",
+      report: makeReserveReport(runId as string),
+      transcript: SAMPLE_ATTEMPTS,
+    });
+  }
+
+  test("re-derives citations from markers (delete drops the id; add makes it appear) + versioning + audit", async () => {
+    const t = initConvexTest();
+    const runId = await seedInterpretableRun(t);
+    await seedMachineDraft(t, runId);
+    const kept = `dx:${runId}:ave:2019`;
+    const added = `dx:${runId}:ldf_stability:12`;
+
+    const out = await t.withIdentity(analystA).mutation(api.runs.editReserveReport, {
+      workspaceId: "org_A",
+      runId,
+      sections: {
+        // keeps its marker
+        executiveSummary: `The position is stable [[cite:${kept}]].`,
+        // marker removed → its id must drop from citations
+        methodSelectionRationale: "Chain ladder was chosen.",
+        // a NEW marker for a real dx id → it must appear
+        movementCommentary: `Adverse development noted [[cite:${added}]].`,
+        limitations: "Estimates carry uncertainty.",
+      },
+    });
+
+    expect(out).toEqual({ contentVersion: 2 });
+    const rows = await reserveReportRows(t);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].report.executiveSummary.citations).toEqual([kept]);
+    expect(rows[0].report.methodSelectionRationale.citations).toEqual([]);
+    expect(rows[0].report.movementCommentary.citations).toEqual([added]);
+    // text↔citations consistency: the stored text keeps its markers verbatim.
+    expect(rows[0].report.executiveSummary.text).toContain(`[[cite:${kept}]]`);
+    // human-owned now (both the row flag and the document flag flip).
+    expect(rows[0].machineDrafted).toBe(false);
+    expect(rows[0].report.machineDrafted).toBe(false);
+    expect(rows[0].contentVersion).toBe(2);
+    expect(rows[0].updatedBy).toBe("user_a");
+    expect(typeof rows[0].updatedAt).toBe("string");
+    // schemaVersion / runId preserved through the edit.
+    expect(rows[0].report.schemaVersion).toBe("1.0.0");
+    expect(rows[0].report.runId).toBe(runId);
+
+    const audits = (await auditRows(t)).filter(
+      (a) => a.eventType === "report.edited",
+    );
+    expect(audits).toHaveLength(1);
+    expect(audits[0].runId).toBe(runId);
+    expect(audits[0].payload).toMatchObject({ runId, contentVersion: 2 });
+    // Lean payload — NO section text.
+    expect(JSON.stringify(audits[0].payload)).not.toContain("Chain ladder");
+  });
+
+  test("contentVersion increments on each successive edit", async () => {
+    const t = initConvexTest();
+    const runId = await seedInterpretableRun(t);
+    await seedMachineDraft(t, runId);
+    const sections = {
+      executiveSummary: "One.",
+      methodSelectionRationale: "Two.",
+      movementCommentary: "Three.",
+      limitations: "Four.",
+    };
+    const first = await t
+      .withIdentity(analystA)
+      .mutation(api.runs.editReserveReport, { workspaceId: "org_A", runId, sections });
+    const second = await t
+      .withIdentity(analystA)
+      .mutation(api.runs.editReserveReport, { workspaceId: "org_A", runId, sections });
+    expect(first.contentVersion).toBe(2);
+    expect(second.contentVersion).toBe(3);
+  });
+
+  test("a malformed marker throws MALFORMED_CITATION_MARKER (never stored)", async () => {
+    const t = initConvexTest();
+    const runId = await seedInterpretableRun(t);
+    await seedMachineDraft(t, runId);
+    let code: string | undefined;
+    try {
+      await t.withIdentity(analystA).mutation(api.runs.editReserveReport, {
+        workspaceId: "org_A",
+        runId,
+        sections: {
+          executiveSummary: "Broken [[cite:not-a-dx]] marker.",
+          methodSelectionRationale: "",
+          movementCommentary: "",
+          limitations: "",
+        },
+      });
+    } catch (error) {
+      code = (error as ConvexError<{ code: string }>).data.code;
+    }
+    expect(code).toBe("MALFORMED_CITATION_MARKER");
+    // Row unchanged: still the seeded machine draft at v1.
+    const rows = await reserveReportRows(t);
+    expect(rows[0].contentVersion).toBe(1);
+    expect(rows[0].machineDrafted).toBe(true);
+    expect(
+      (await auditRows(t)).filter((a) => a.eventType === "report.edited"),
+    ).toHaveLength(0);
+  });
+
+  test("editing a published report throws REPORT_NOT_EDITABLE (AC-2: no one edits published)", async () => {
+    const t = initConvexTest();
+    const runId = await seedInterpretableRun(t);
+    await seedReportRow(t, runId, "published");
+    let code: string | undefined;
+    try {
+      await t.withIdentity(analystA).mutation(api.runs.editReserveReport, {
+        workspaceId: "org_A",
+        runId,
+        sections: {
+          executiveSummary: "tampered",
+          methodSelectionRationale: "",
+          movementCommentary: "",
+          limitations: "",
+        },
+      });
+    } catch (error) {
+      code = (error as ConvexError<{ code: string }>).data.code;
+    }
+    expect(code).toBe("REPORT_NOT_EDITABLE");
+    // Untouched.
+    const rows = await reserveReportRows(t);
+    expect(rows[0].status).toBe("published");
+    expect(rows[0].contentVersion).toBe(1);
+  });
+
+  test("editing an awaiting_review report throws REPORT_NOT_EDITABLE", async () => {
+    const t = initConvexTest();
+    const runId = await seedInterpretableRun(t);
+    await seedReportRow(t, runId, "awaiting_review");
+    let code: string | undefined;
+    try {
+      await t.withIdentity(analystA).mutation(api.runs.editReserveReport, {
+        workspaceId: "org_A",
+        runId,
+        sections: {
+          executiveSummary: "x",
+          methodSelectionRationale: "",
+          movementCommentary: "",
+          limitations: "",
+        },
+      });
+    } catch (error) {
+      code = (error as ConvexError<{ code: string }>).data.code;
+    }
+    expect(code).toBe("REPORT_NOT_EDITABLE");
+  });
+
+  test("a cross-tenant / vanished report throws REPORT_NOT_FOUND (no existence leak)", async () => {
+    const t = initConvexTest();
+    const runId = await seedInterpretableRun(t, { workspaceId: "org_A" });
+    await seedMachineDraft(t, runId);
+    let code: string | undefined;
+    try {
+      await t.withIdentity(analystB).mutation(api.runs.editReserveReport, {
+        workspaceId: "org_B",
+        runId,
+        sections: {
+          executiveSummary: "x",
+          methodSelectionRationale: "",
+          movementCommentary: "",
+          limitations: "",
+        },
+      });
+    } catch (error) {
+      code = (error as ConvexError<{ code: string }>).data.code;
+    }
+    expect(code).toBe("REPORT_NOT_FOUND");
+  });
+
+  test("unauthenticated is rejected (AD-4)", async () => {
+    const t = initConvexTest();
+    const runId = await seedInterpretableRun(t);
+    await seedMachineDraft(t, runId);
+    let code: string | undefined;
+    try {
+      await t.mutation(api.runs.editReserveReport, {
+        workspaceId: "org_A",
+        runId,
+        sections: {
+          executiveSummary: "x",
+          methodSelectionRationale: "",
+          movementCommentary: "",
+          limitations: "",
+        },
+      });
+    } catch (error) {
+      code = (error as ConvexError<{ code: string }>).data.code;
+    }
+    expect(code).toBe("UNAUTHENTICATED");
   });
 });
 

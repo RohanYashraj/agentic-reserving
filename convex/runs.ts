@@ -23,6 +23,7 @@ import type {
   ResultSet,
 } from "./lib/engineContract";
 import {
+  RESERVE_REPORT_SCHEMA_VERSION,
   diagnosticsBundleValidator,
   reDerivationReportValidator,
   recommendationsValidator,
@@ -30,6 +31,10 @@ import {
   resultSetValidator,
   runParametersValidator,
 } from "./lib/engineContract";
+import {
+  citationsFromText,
+  markersAreWellFormed,
+} from "./lib/citationMarker";
 import { requireMember } from "./lib/guards";
 import { workflow } from "./workflow";
 
@@ -1323,19 +1328,34 @@ export const storeReserveReport = internalMutation({
       });
     }
 
-    const createdAt = new Date(Date.now()).toISOString();
+    const now = new Date(Date.now()).toISOString();
     const existing = await ctx.db
       .query("reserveReports")
       .withIndex("by_run", (q) => q.eq("runId", runId))
       .unique();
     if (existing !== null) {
-      // Re-draft overwrites the machine draft (regenerable; Epic 6 guards
-      // human-owned rows / versions, which don't exist yet).
+      // A re-draft overwrites the MACHINE draft (regenerable) and resets it to a
+      // fresh machine-owned v1. But it must NEVER silently discard human edits
+      // (AD-5: once edited, the version is human-owned) — if the existing row is
+      // human-owned (`machineDrafted === false`), reject rather than clobber. In
+      // 6.1 the generate trigger is only offered when no report exists (D6), so
+      // this guard is belt-and-braces for a direct/racing action call.
+      if (!existing.machineDrafted) {
+        throw new ConvexError({
+          code: "REPORT_ALREADY_EDITED",
+          message:
+            "This Reserve Report has human edits; regenerating would discard " +
+            "them. Start a new version instead (Epic 6.4).",
+        });
+      }
       await ctx.db.patch(existing._id, {
         report,
         machineDrafted: true,
+        contentVersion: 1,
         createdBy: actor,
-        createdAt,
+        createdAt: now,
+        updatedBy: actor,
+        updatedAt: now,
       });
     } else {
       await ctx.db.insert("reserveReports", {
@@ -1344,8 +1364,11 @@ export const storeReserveReport = internalMutation({
         status: "draft",
         machineDrafted: true,
         report,
+        contentVersion: 1,
         createdBy: actor,
-        createdAt,
+        createdAt: now,
+        updatedBy: actor,
+        updatedAt: now,
       });
     }
 
@@ -1407,10 +1430,210 @@ export const getReserveReport = query({
     await requireMember(ctx, workspaceId);
     const run = await ctx.db.get(runId);
     if (run === null || run.workspaceId !== workspaceId) return null;
+    // Returns the row verbatim — now carrying the 6.1 human-edit columns
+    // (contentVersion/updatedBy/updatedAt/status) automatically. No projection.
     return await ctx.db
       .query("reserveReports")
       .withIndex("by_run", (q) => q.eq("runId", runId))
       .unique();
+  },
+});
+
+// The four canonical Reserve Report sections (FR-11), in editor order.
+const reportSectionsValidator = v.object({
+  executiveSummary: v.string(),
+  methodSelectionRationale: v.string(),
+  movementCommentary: v.string(),
+  limitations: v.string(),
+});
+
+/**
+ * Edit a draft Reserve Report (Story 6.1, AC-1, FR-13, AD-5). A member action —
+ * `requireMember` FIRST (AD-4); editing a draft is NOT a privileged approval
+ * (approve/publish/override are `requireRole(senior_actuary)` in 6.3/6.4).
+ *
+ * The client sends ONLY the four edited section TEXTS (each with inline
+ * `[[cite:...]]` markers). The mutation RE-DERIVES each section's `citations[]`
+ * from its markers server-side (`citationsFromText`, D2) — the client is never
+ * trusted for the machine-readable pin, so `text`↔`citations` stay consistent by
+ * construction (deleting a chip drops its marker → its id disappears). The ONLY
+ * edit-time validation is marker-syntax INTEGRITY (`markersAreWellFormed`, keep
+ * the text tokenizable) — this is explicitly NOT the Provenance Gate (AD-5:
+ * human edits are never re-gated; no numeric-provenance / claim-coupling check).
+ *
+ * The reassembled document keeps `schemaVersion`/`runId`, flips `machineDrafted`
+ * to false (this version is now human-owned), and is re-validated at the typed
+ * `report` patch boundary (AD-10: a malformed doc throws, never stored). The row
+ * bumps `contentVersion` (+1 — the version the approver signs, AD-5/FR-13) and
+ * records `updatedBy`/`updatedAt`. Audited `report.edited` with a LEAN payload
+ * ({ runId, contentVersion } only — the content lives on the row; AD-1/AD-6).
+ */
+export const editReserveReport = mutation({
+  args: {
+    workspaceId: v.string(),
+    runId: v.id("runs"),
+    sections: reportSectionsValidator,
+  },
+  returns: v.object({ contentVersion: v.number() }),
+  handler: async (ctx, { workspaceId, runId, sections }) => {
+    const { identity } = await requireMember(ctx, workspaceId);
+    const actor = identity.subject;
+
+    const existing = await ctx.db
+      .query("reserveReports")
+      .withIndex("by_run", (q) => q.eq("runId", runId))
+      .unique();
+    // No existence leak: a vanished / cross-tenant row throws the same
+    // REPORT_NOT_FOUND (mirrors getRunForDraftReport's tenancy posture).
+    if (existing === null || existing.workspaceId !== workspaceId) {
+      throw new ConvexError({
+        code: "REPORT_NOT_FOUND",
+        message: "That Reserve Report does not exist in this Workspace.",
+      });
+    }
+    // Immutability guard (D5): only a `draft` is editable. An `awaiting_review`
+    // (6.2) or `published` (6.4) report is immutable to edits (AC-2 "no one
+    // edits a non-draft/published report").
+    if (existing.status !== "draft") {
+      throw new ConvexError({
+        code: "REPORT_NOT_EDITABLE",
+        message:
+          "This Reserve Report is no longer a draft and cannot be edited.",
+      });
+    }
+
+    // Marker-syntax integrity per section (keep the stored text tokenizable).
+    for (const text of Object.values(sections)) {
+      if (!markersAreWellFormed(text)) {
+        throw new ConvexError({
+          code: "MALFORMED_CITATION_MARKER",
+          message:
+            "A citation marker in the edited text is malformed. Edit around " +
+            "chips — never inside them.",
+        });
+      }
+    }
+
+    // Reassemble the typed document: re-derive citations from the markers.
+    const report = {
+      ...existing.report,
+      machineDrafted: false,
+      executiveSummary: {
+        text: sections.executiveSummary,
+        citations: citationsFromText(sections.executiveSummary),
+      },
+      methodSelectionRationale: {
+        text: sections.methodSelectionRationale,
+        citations: citationsFromText(sections.methodSelectionRationale),
+      },
+      movementCommentary: {
+        text: sections.movementCommentary,
+        citations: citationsFromText(sections.movementCommentary),
+      },
+      limitations: {
+        text: sections.limitations,
+        citations: citationsFromText(sections.limitations),
+      },
+    };
+
+    const contentVersion = existing.contentVersion + 1;
+    const now = new Date(Date.now()).toISOString();
+    // The typed `report` patch re-validates the reassembled document (AD-10).
+    await ctx.db.patch(existing._id, {
+      report,
+      machineDrafted: false,
+      contentVersion,
+      updatedBy: actor,
+      updatedAt: now,
+    });
+
+    await appendAuditEntryInTransaction(ctx, {
+      workspaceId,
+      actor,
+      eventType: "report.edited",
+      runId,
+      payload: { runId, contentVersion },
+    });
+
+    return { contentVersion };
+  },
+});
+
+/**
+ * Create a Reserve Report shell from the MANUAL template (Story 6.1, AC-2,
+ * FR-12, AD-9). Offered whenever no report exists — the ONLY path in Engine-Only
+ * Mode, a secondary option otherwise. A member action (`requireMember` first).
+ *
+ * NO interpretability precondition (unlike `getRunForDraftReport`): hand
+ * drafting must work during a model outage (AD-9) — a manual report needs no
+ * ResultSet / DiagnosticsBundle / recommendations. It still attaches to a Run
+ * (the Report tab lives under `/runs/[runId]`), so the Run must exist in this
+ * Workspace. Idempotent: a second call throws `REPORT_ALREADY_EXISTS` rather
+ * than clobbering an existing draft / machine draft.
+ *
+ * Builds a `draft`, `machineDrafted: false`, `contentVersion: 1`, four EMPTY
+ * sections (no chips → the atomic-chip / uncited machinery is inert until the
+ * Analyst types). `schemaVersion` is the shared engine constant (no engine here
+ * to supply it). Audited `report.manualCreated` ({ runId }, lean).
+ */
+export const createManualReport = mutation({
+  args: { workspaceId: v.string(), runId: v.id("runs") },
+  returns: v.id("reserveReports"),
+  handler: async (ctx, { workspaceId, runId }) => {
+    const { identity } = await requireMember(ctx, workspaceId);
+    const actor = identity.subject;
+
+    const run = await ctx.db.get(runId);
+    if (run === null || run.workspaceId !== workspaceId) {
+      throw new ConvexError({
+        code: "RUN_NOT_FOUND",
+        message: "That Run does not exist in this Workspace.",
+      });
+    }
+
+    const existing = await ctx.db
+      .query("reserveReports")
+      .withIndex("by_run", (q) => q.eq("runId", runId))
+      .unique();
+    if (existing !== null) {
+      throw new ConvexError({
+        code: "REPORT_ALREADY_EXISTS",
+        message: "A Reserve Report already exists for this Run.",
+      });
+    }
+
+    const emptySection = { text: "", citations: [] as string[] };
+    const now = new Date(Date.now()).toISOString();
+    const reportId = await ctx.db.insert("reserveReports", {
+      workspaceId,
+      runId,
+      status: "draft",
+      machineDrafted: false,
+      report: {
+        schemaVersion: RESERVE_REPORT_SCHEMA_VERSION,
+        runId: runId as string,
+        machineDrafted: false,
+        executiveSummary: { ...emptySection },
+        methodSelectionRationale: { ...emptySection },
+        movementCommentary: { ...emptySection },
+        limitations: { ...emptySection },
+      },
+      contentVersion: 1,
+      createdBy: actor,
+      createdAt: now,
+      updatedBy: actor,
+      updatedAt: now,
+    });
+
+    await appendAuditEntryInTransaction(ctx, {
+      workspaceId,
+      actor,
+      eventType: "report.manualCreated",
+      runId,
+      payload: { runId },
+    });
+
+    return reportId;
   },
 });
 

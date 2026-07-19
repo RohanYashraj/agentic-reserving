@@ -56,6 +56,7 @@ function makeRun(overrides: Partial<RunView> = {}): RunView {
     hasResults: false,
     hasDiagnostics: false,
     hasRecommendations: false,
+    hasReserveReport: false,
     interpretationFailure: null,
     ...overrides,
   };
@@ -502,5 +503,43 @@ describe("RunDetail — re-derivation (Story 4.7, AC1/AC5)", () => {
     await waitFor(() =>
       expect(screen.getByText("The engine is down.")).toBeDefined(),
     );
+  });
+});
+
+describe("RunDetail — Report tab (Story 6.1)", () => {
+  const reportHandlers = () => ({
+    onEditReport: vi.fn().mockResolvedValue({ contentVersion: 2 }),
+    onCreateManual: vi.fn().mockResolvedValue("rep1"),
+    onGenerateDraft: vi.fn().mockResolvedValue({ status: "accepted" as const }),
+  });
+
+  it("degrades to the Epic-6 placeholder when the report callbacks are unwired", () => {
+    render(<RunDetail run={completeRun()} onRetry={vi.fn()} />);
+    fireEvent.focus(screen.getByRole("tab", { name: "Report" }));
+    expect(
+      screen.getByText(/Report unlocks after Interpretation/i),
+    ).toBeDefined();
+    // The other tabs are unaffected — Results/Diagnostics/Interpretation triggers persist.
+    expect(screen.getByRole("tab", { name: "Results" })).toBeDefined();
+    expect(screen.getByRole("tab", { name: "Diagnostics" })).toBeDefined();
+    expect(screen.getByRole("tab", { name: "Interpretation" })).toBeDefined();
+  });
+
+  it("wired + no report + hasRecommendations → the ReportTab creation view (Generate + manual)", () => {
+    render(
+      <RunDetail
+        run={{ ...completeRun(), hasRecommendations: true }}
+        report={null}
+        onRetry={vi.fn()}
+        {...reportHandlers()}
+      />,
+    );
+    fireEvent.focus(screen.getByRole("tab", { name: "Report" }));
+    expect(
+      screen.getByRole("button", { name: "Generate report draft" }),
+    ).toBeDefined();
+    expect(
+      screen.getByRole("button", { name: "Start from a blank template" }),
+    ).toBeDefined();
   });
 });
