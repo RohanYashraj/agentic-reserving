@@ -7,10 +7,18 @@ engine's ``ResultSet`` / ``DiagnosticsBundle`` unchanged; those already
 carry their own aliases.
 """
 
+from typing import Literal
+
 from pydantic import BaseModel, field_validator
 
+from engine_service.recommendations_flow import (
+    AttemptRecord,
+    RecommendationsAccepted,
+    RecommendationsOutcome,
+)
 from reserving_engine import (
     DiagnosticsBundle,
+    Recommendations,
     ResultSet,
     RunParameters,
     Triangle,
@@ -77,6 +85,63 @@ class ReDeriveRequest(BaseModel):
         if not value:
             raise ValueError("run_id must not be empty")
         return value
+
+
+class RecommendRequest(BaseModel):
+    """``POST /recommendations`` body (Story 5.3). engine_service is stateless
+    (AD-3), so the Run's stored ResultSet + DiagnosticsBundle are passed DOWN
+    from Convex — never fetched by the engine. ``run_id`` is the AD-7
+    correlation key."""
+
+    model_config = _MODEL_CONFIG
+
+    run_id: str
+    result_set: ResultSet
+    diagnostics_bundle: DiagnosticsBundle
+
+    @field_validator("run_id")
+    @classmethod
+    def _non_empty_run_id(cls, value: str) -> str:
+        if not value:
+            raise ValueError("run_id must not be empty")
+        return value
+
+
+class RecommendResponse(BaseModel):
+    """``POST /recommendations`` response (Story 5.3). A discriminated result
+    carrying the per-attempt transcript(s) in EVERY arm so the Convex caller
+    audit-logs the full LLM interaction on success AND on failure (FR-15,
+    AD-6). Both ``accepted`` and ``rejected`` return HTTP 200 — a gate /
+    structural exhaustion is a normal, auditable outcome, not a server error
+    (``model_unavailable`` and bad input use the error envelope instead).
+
+    ``recommendations`` is the accepted document (``null`` on rejection);
+    ``rejection_summary`` explains a rejection (``null`` on acceptance)."""
+
+    model_config = _MODEL_CONFIG
+
+    status: Literal["accepted", "rejected"]
+    recommendations: Recommendations | None = None
+    attempts: tuple[AttemptRecord, ...]
+    rejection_summary: str | None = None
+
+    @classmethod
+    def from_outcome(
+        cls, run_id: str, outcome: RecommendationsOutcome
+    ) -> "RecommendResponse":
+        if isinstance(outcome, RecommendationsAccepted):
+            return cls(
+                status="accepted",
+                recommendations=outcome.recommendations,
+                attempts=outcome.attempts,
+                rejection_summary=None,
+            )
+        return cls(
+            status="rejected",
+            recommendations=None,
+            attempts=outcome.attempts,
+            rejection_summary=outcome.reason_summary,
+        )
 
 
 class CanonicalizeResponse(BaseModel):

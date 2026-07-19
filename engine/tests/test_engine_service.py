@@ -71,7 +71,9 @@ def _run_body(run_id: str, triangle: Triangle, parameters: RunParameters | None 
 
 
 class TestAuth:
-    @pytest.mark.parametrize("path", ["/validate", "/runs", "/canonicalize", "/rederive"])
+    @pytest.mark.parametrize(
+        "path", ["/validate", "/runs", "/canonicalize", "/rederive", "/recommendations"]
+    )
     def test_missing_authorization_header_is_401(self, client: TestClient, path: str) -> None:
         resp = client.post(path, json={})
         assert resp.status_code == 401
@@ -79,18 +81,24 @@ class TestAuth:
         assert body["code"] == "unauthorized"
         assert set(body) == {"code", "message", "details"}
 
-    @pytest.mark.parametrize("path", ["/validate", "/runs", "/canonicalize", "/rederive"])
+    @pytest.mark.parametrize(
+        "path", ["/validate", "/runs", "/canonicalize", "/rederive", "/recommendations"]
+    )
     def test_wrong_secret_is_401(self, client: TestClient, path: str) -> None:
         resp = client.post(path, json={}, headers={"Authorization": "Bearer wrong-secret"})
         assert resp.status_code == 401
         assert resp.json()["code"] == "unauthorized"
 
-    @pytest.mark.parametrize("path", ["/validate", "/runs", "/canonicalize", "/rederive"])
+    @pytest.mark.parametrize(
+        "path", ["/validate", "/runs", "/canonicalize", "/rederive", "/recommendations"]
+    )
     def test_non_bearer_scheme_is_401(self, client: TestClient, path: str) -> None:
         resp = client.post(path, json={}, headers={"Authorization": f"Basic {TEST_SECRET}"})
         assert resp.status_code == 401
 
-    @pytest.mark.parametrize("path", ["/validate", "/runs", "/canonicalize", "/rederive"])
+    @pytest.mark.parametrize(
+        "path", ["/validate", "/runs", "/canonicalize", "/rederive", "/recommendations"]
+    )
     def test_non_ascii_token_is_401_not_500(self, client: TestClient, path: str) -> None:
         # A non-ASCII bearer token must fail closed as 401 — never crash the
         # constant-time compare (TypeError) into an unhandled 500. Sent as raw
@@ -430,6 +438,146 @@ class TestRederive:
         stored = run_methods(TAYLOR_ASHE)
         resp = client.post(
             "/rederive", json=_rederive_body("", TAYLOR_ASHE, stored), headers=AUTH
+        )
+        assert resp.status_code == 422
+        assert resp.json()["code"] == "bad_request"
+
+
+# --------------------------------------------------------------------------- #
+# Story 5.3: POST /recommendations — the interpretation endpoint (AC-1..4)      #
+# --------------------------------------------------------------------------- #
+
+import json  # noqa: E402
+
+from agno.models.base import Model  # noqa: E402
+from agno.models.response import ModelResponse  # noqa: E402
+
+
+class _ScriptedModel(Model):
+    """A scripted model returning a canned final answer per attempt (no network,
+    no google-genai) — the 5.1 injection seam for the endpoint (Task 8.5)."""
+
+    def __init__(self, outputs: list[str]) -> None:
+        super().__init__(id="scripted-endpoint-model")
+        self.provider = "scripted"
+        self._outputs = outputs
+        self._i = 0
+
+    def invoke(self, *args, **kwargs) -> ModelResponse:
+        out = self._outputs[min(self._i, len(self._outputs) - 1)]
+        self._i += 1
+        return ModelResponse(role="assistant", content=out)
+
+    async def ainvoke(self, *args, **kwargs) -> ModelResponse:
+        return self.invoke(*args, **kwargs)
+
+    def invoke_stream(self, *args, **kwargs):
+        yield self.invoke(*args, **kwargs)
+
+    async def ainvoke_stream(self, *args, **kwargs):
+        yield self.invoke(*args, **kwargs)
+
+    def _parse_provider_response(self, response, **kwargs) -> ModelResponse:
+        return response
+
+    def _parse_provider_response_delta(self, response) -> ModelResponse:
+        return response
+
+
+REC_RUN_ID = "run-5-3-endpoint"
+
+
+def _rec_run():
+    result_set = run_methods(TAYLOR_ASHE, CL_BF_MACK)
+    bundle = compute_diagnostics(TAYLOR_ASHE, result_set, REC_RUN_ID)
+    return result_set, bundle
+
+
+def _rec_body(run_id: str, result_set, bundle) -> dict:
+    return {
+        "runId": run_id,
+        "resultSet": result_set.model_dump(mode="json", by_alias=True),
+        "diagnosticsBundle": bundle.model_dump(mode="json", by_alias=True),
+    }
+
+
+def _draft_json(result_set, bundle, *, drop_first=False):
+    origins = [o.origin for o in result_set.method_results[0].origin_results]
+    dx_id = bundle.ldf_stability[0].id
+    use = origins[1:] if drop_first else origins
+    recs = [
+        {
+            "origin": origin,
+            "method": "chain_ladder",
+            "reasons": [f"Recommended for {origin} " + "{{" + dx_id + "}}."],
+        }
+        for origin in use
+    ]
+    return json.dumps({"recommendations": recs})
+
+
+def _rec_client(build_model, *, gemini_key: str | None = "k", gemini_model: str | None = "m") -> TestClient:
+    settings = Settings(
+        service_secret=TEST_SECRET,
+        gemini_api_key=gemini_key,
+        gemini_model_id=gemini_model,
+    )
+    return TestClient(create_app(settings=settings, build_model=build_model))
+
+
+class TestRecommendations:
+    def test_accepted_returns_document_and_transcript_200(self) -> None:
+        result_set, bundle = _rec_run()
+        good = _draft_json(result_set, bundle)
+        client = _rec_client(lambda: _ScriptedModel([good]))
+        resp = client.post(
+            "/recommendations", json=_rec_body(REC_RUN_ID, result_set, bundle), headers=AUTH
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "accepted"
+        assert body["recommendations"] is not None
+        assert body["recommendations"]["runId"] == REC_RUN_ID
+        # One recommendation per Origin Period.
+        origins = [o.origin for o in result_set.method_results[0].origin_results]
+        assert len(body["recommendations"]["recommendations"]) == len(origins)
+        # The transcript rides in every arm (FR-15).
+        assert len(body["attempts"]) == 1
+        assert body["rejectionSummary"] is None
+
+    def test_gate_exhaustion_returns_rejected_200_no_recommendations(self) -> None:
+        result_set, bundle = _rec_run()
+        # Persistently missing an origin → the loop exhausts and rejects.
+        bad = _draft_json(result_set, bundle, drop_first=True)
+        client = _rec_client(lambda: _ScriptedModel([bad]))
+        resp = client.post(
+            "/recommendations", json=_rec_body(REC_RUN_ID, result_set, bundle), headers=AUTH
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "rejected"
+        assert body["recommendations"] is None
+        assert len(body["attempts"]) >= 1
+        assert body["rejectionSummary"]
+
+    def test_model_not_configured_is_model_unavailable_503(self) -> None:
+        result_set, bundle = _rec_run()
+        # No injected model + no key → build_gemini_model raises → 503 envelope.
+        client = _rec_client(None, gemini_key=None, gemini_model=None)
+        resp = client.post(
+            "/recommendations", json=_rec_body(REC_RUN_ID, result_set, bundle), headers=AUTH
+        )
+        assert resp.status_code == 503
+        body = resp.json()
+        assert body["code"] == "model_unavailable"
+        assert set(body) == {"code", "message", "details"}
+
+    def test_empty_run_id_is_422_bad_request(self) -> None:
+        result_set, bundle = _rec_run()
+        good = _draft_json(result_set, bundle)
+        client = _rec_client(lambda: _ScriptedModel([good]))
+        resp = client.post(
+            "/recommendations", json=_rec_body("", result_set, bundle), headers=AUTH
         )
         assert resp.status_code == 422
         assert resp.json()["code"] == "bad_request"

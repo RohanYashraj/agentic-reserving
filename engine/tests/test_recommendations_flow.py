@@ -1,0 +1,238 @@
+"""Bounded generate-gate-validate loop tests (Story 5.3, Task 4).
+
+``generate_recommendations`` composes the agent + Provenance Gate (5.2) +
+``validate_recommendations`` (Task 1) into one bounded redraft loop. Driven
+by the 5.1 ``_ScriptedModel`` idiom (no network, no google-genai): each
+attempt is a scripted final answer, so the loop is fully deterministic and
+golden-testable.
+
+Origins, a real ``dx:`` id, and the runId are read off the live engine
+objects — no golden literals pinned.
+"""
+
+import json
+
+import pytest
+from agno.models.base import Model
+from agno.models.response import ModelResponse
+
+from copilot_agent import build_gemini_model
+from copilot_agent.agent import ModelNotConfiguredError
+from engine_service.recommendations_flow import (
+    RecommendationsAccepted,
+    RecommendationsFailed,
+    generate_recommendations,
+)
+from reserving_engine import (
+    AprioriLossRatio,
+    RunParameters,
+    compute_diagnostics,
+    run_methods,
+)
+from tests.fixtures import TAYLOR_ASHE
+
+RUN_ID = "run-5-3-test"
+BF_APRIORIS = tuple(
+    AprioriLossRatio(origin=origin, loss_ratio=0.9, exposure=5_000_000.0)
+    for origin in TAYLOR_ASHE.origin_periods
+)
+
+
+def _run(methods=("chain_ladder", "bornhuetter_ferguson", "mack")):
+    params = RunParameters(methods=methods, apriori_loss_ratios=BF_APRIORIS)
+    result_set = run_methods(TAYLOR_ASHE, params)
+    bundle = compute_diagnostics(TAYLOR_ASHE, result_set, RUN_ID)
+    return result_set, bundle
+
+
+class _ScriptedModel(Model):
+    """Returns a canned final answer per attempt (one invoke per attempt, no
+    tool calls). The last output repeats if the loop runs more attempts."""
+
+    def __init__(self, outputs: list[str]) -> None:
+        super().__init__(id="scripted-flow-model")
+        self.provider = "scripted"
+        self._outputs = outputs
+        self._i = 0
+
+    def invoke(self, *args, **kwargs) -> ModelResponse:
+        out = self._outputs[min(self._i, len(self._outputs) - 1)]
+        self._i += 1
+        return ModelResponse(role="assistant", content=out)
+
+    async def ainvoke(self, *args, **kwargs) -> ModelResponse:
+        return self.invoke(*args, **kwargs)
+
+    def invoke_stream(self, *args, **kwargs):
+        yield self.invoke(*args, **kwargs)
+
+    async def ainvoke_stream(self, *args, **kwargs):
+        yield self.invoke(*args, **kwargs)
+
+    def _parse_provider_response(self, response, **kwargs) -> ModelResponse:
+        return response
+
+    def _parse_provider_response_delta(self, response) -> ModelResponse:
+        return response
+
+
+def _origins(result_set):
+    return [o.origin for o in result_set.method_results[0].origin_results]
+
+
+def _real_dx(bundle):
+    return bundle.ldf_stability[0].id
+
+
+def _draft_json(
+    origins,
+    dx_id,
+    *,
+    method="chain_ladder",
+    drop_first=False,
+    rs_origin=None,
+    literal_origin=None,
+    bogus_dx=False,
+):
+    use = origins[1:] if drop_first else origins
+    recs = []
+    for origin in use:
+        # The dx placeholder inner IS the full id (already starts with "dx:") —
+        # no double-prefix (5.2 interpretation "B").
+        cite = "dx:run-5-3-test:ave:9999" if bogus_dx else dx_id
+        dx_ph = "{{" + cite + "}}"
+        if literal_origin is not None and origin == literal_origin:
+            reason = f"The ultimate is 999999999 {dx_ph}."
+        elif rs_origin is not None and origin == rs_origin:
+            rs_ph = "{{rs:" + RUN_ID + ":" + method + ":" + origin + ":ultimate}}"
+            reason = f"Ultimate is {rs_ph} {dx_ph}."
+        else:
+            reason = f"Recommended for {origin} {dx_ph}."
+        recs.append({"origin": origin, "method": method, "reasons": [reason]})
+    return json.dumps({"recommendations": recs})
+
+
+# --------------------------------------------------------------------------- #
+# (a) clean first attempt → accepted, one AttemptRecord                        #
+# --------------------------------------------------------------------------- #
+
+
+def test_clean_first_attempt_is_accepted():
+    result_set, bundle = _run()
+    origins = _origins(result_set)
+    dx_id = _real_dx(bundle)
+    # One origin carries an {{rs:...}} figure so we can prove the gate rendered it.
+    rs_origin = origins[0]
+    output = _draft_json(origins, dx_id, rs_origin=rs_origin)
+    outcome = generate_recommendations(_ScriptedModel([output]), result_set, bundle)
+
+    assert isinstance(outcome, RecommendationsAccepted)
+    assert outcome.status == "accepted"
+    assert len(outcome.attempts) == 1
+    assert outcome.attempts[0].rejections == ()
+    # Exactly one recommendation per origin.
+    got_origins = [r.origin for r in outcome.recommendations.recommendations]
+    assert sorted(got_origins) == sorted(origins)
+    assert outcome.recommendations.run_id == RUN_ID
+    # The gate ran: the {{rs:...}} figure was rendered to digits in the accepted
+    # reason text, and the citation was resolved to the real dx id.
+    rs_rec = next(r for r in outcome.recommendations.recommendations if r.origin == rs_origin)
+    assert any(ch.isdigit() for ch in rs_rec.reasons[0].text)
+    assert dx_id in rs_rec.reasons[0].citations
+
+
+# --------------------------------------------------------------------------- #
+# (b) first attempt bad, second clean → accepted after 2 attempts              #
+# --------------------------------------------------------------------------- #
+
+
+def test_missing_origin_then_clean_is_accepted_after_two_attempts():
+    result_set, bundle = _run()
+    origins = _origins(result_set)
+    dx_id = _real_dx(bundle)
+    bad = _draft_json(origins, dx_id, drop_first=True)  # missing origins[0]
+    good = _draft_json(origins, dx_id)
+    outcome = generate_recommendations(_ScriptedModel([bad, good]), result_set, bundle)
+
+    assert isinstance(outcome, RecommendationsAccepted)
+    assert len(outcome.attempts) == 2
+    # Both transcripts recorded (FR-15); the first attempt carries the rejection.
+    assert outcome.attempts[0].rejections  # non-empty
+    assert "missing_origin" in {r.code for r in outcome.attempts[0].rejections}
+    assert outcome.attempts[1].rejections == ()
+
+
+def test_bogus_citation_then_clean_is_accepted():
+    result_set, bundle = _run()
+    origins = _origins(result_set)
+    dx_id = _real_dx(bundle)
+    bad = _draft_json(origins, dx_id, bogus_dx=True)
+    good = _draft_json(origins, dx_id)
+    outcome = generate_recommendations(_ScriptedModel([bad, good]), result_set, bundle)
+
+    assert isinstance(outcome, RecommendationsAccepted)
+    assert len(outcome.attempts) == 2
+    # The gate catches the unresolvable dx placeholder while rendering.
+    codes = {r.code for r in outcome.attempts[0].rejections}
+    assert "unresolvable_dx_citation" in codes
+
+
+def test_literal_figure_is_rejected_unsourced_then_clean_accepted():
+    result_set, bundle = _run()
+    origins = _origins(result_set)
+    dx_id = _real_dx(bundle)
+    bad = _draft_json(origins, dx_id, literal_origin=origins[0])
+    good = _draft_json(origins, dx_id)
+    outcome = generate_recommendations(_ScriptedModel([bad, good]), result_set, bundle)
+
+    assert isinstance(outcome, RecommendationsAccepted)
+    codes = {r.code for r in outcome.attempts[0].rejections}
+    assert "unsourced_number" in codes
+
+
+# --------------------------------------------------------------------------- #
+# (c) every attempt bad → failed after max_attempts, no partial output         #
+# --------------------------------------------------------------------------- #
+
+
+def test_persistent_failure_is_failed_never_partial():
+    result_set, bundle = _run()
+    origins = _origins(result_set)
+    dx_id = _real_dx(bundle)
+    bad = _draft_json(origins, dx_id, drop_first=True)  # always missing an origin
+    outcome = generate_recommendations(
+        _ScriptedModel([bad]), result_set, bundle, max_attempts=3
+    )
+
+    assert isinstance(outcome, RecommendationsFailed)
+    assert outcome.status == "failed"
+    assert len(outcome.attempts) == 3
+    # NEVER partial output — a failed outcome has no recommendations attribute.
+    assert not hasattr(outcome, "recommendations")
+    assert "3 attempts" in outcome.reason_summary
+    # Every attempt's transcript is present (for audit).
+    assert all(a.transcript is not None for a in outcome.attempts)
+
+
+def test_unparseable_draft_is_rejected_and_retried():
+    result_set, bundle = _run()
+    origins = _origins(result_set)
+    dx_id = _real_dx(bundle)
+    good = _draft_json(origins, dx_id)
+    outcome = generate_recommendations(
+        _ScriptedModel(["not json at all", good]), result_set, bundle
+    )
+    assert isinstance(outcome, RecommendationsAccepted)
+    assert "draft_unparseable" in {r.code for r in outcome.attempts[0].rejections}
+
+
+# --------------------------------------------------------------------------- #
+# Model-not-configured is NOT swallowed by the loop (AD-9, Task 4.5)            #
+# --------------------------------------------------------------------------- #
+
+
+def test_model_not_configured_is_not_swallowed():
+    # build_gemini_model raises BEFORE the loop is ever entered; the loop never
+    # catches ModelNotConfiguredError as a redraftable rejection.
+    with pytest.raises(ModelNotConfiguredError):
+        build_gemini_model("", "")

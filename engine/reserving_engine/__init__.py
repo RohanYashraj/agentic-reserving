@@ -23,6 +23,13 @@ from reserving_engine.methods import (
     MissingAprioriError,
     run_methods,
 )
+from reserving_engine.recommendations import (
+    MethodRecommendation,
+    RecommendationReason,
+    RecommendationRejection,
+    Recommendations,
+    validate_recommendations,
+)
 from reserving_engine.rederivation import (
     Discrepancy,
     ReDerivationReport,
@@ -62,10 +69,14 @@ __all__ = [
     "LdfStabilityElement",
     "Lineage",
     "LinkRatio",
+    "MethodRecommendation",
     "MethodResult",
     "MissingAprioriError",
     "OriginResult",
     "ReDerivationReport",
+    "RecommendationReason",
+    "RecommendationRejection",
+    "Recommendations",
     "ResidualElement",
     "ResultSet",
     "RunParameters",
@@ -79,6 +90,7 @@ __all__ = [
     "rederive",
     "resolve_diagnostic",
     "run_methods",
+    "validate_recommendations",
     "triangle_hash",
     "validate_triangle",
 ]

@@ -14,6 +14,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from copilot_agent import ModelNotConfiguredError
 from reserving_engine import InvalidAprioriError, InvalidTriangleError, MissingAprioriError
 
 
@@ -72,6 +73,18 @@ def register_exception_handlers(app: FastAPI) -> None:
             "invalid_apriori",
             str(exc),
             {"origins": list(exc.origins)},
+        )
+
+    @app.exception_handler(ModelNotConfiguredError)
+    async def _model_unavailable(_request: Request, _exc: ModelNotConfiguredError) -> JSONResponse:
+        # Story 5.3 (AD-9): the interpretation model is not configured. A stable
+        # `model_unavailable` (503) so callEngine surfaces `engine.model_unavailable`
+        # — the typed signal Story 5.6 keys Engine-Only Mode on. The key is never
+        # echoed. Not a bug (no 500): a deliberate fail-closed outcome.
+        return _envelope(
+            503,
+            "model_unavailable",
+            "the interpretation model is not configured for this deployment",
         )
 
     @app.exception_handler(RequestValidationError)

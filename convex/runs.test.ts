@@ -1493,3 +1493,331 @@ describe("rederiveRun — re-derivation from Lineage (AC1–AC4, AC7)", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
+
+// --- Story 5.3: Method Recommendations (persistence + audit + action) --------
+
+/** A schema-valid Recommendations document whose runId matches the given run. */
+function makeRecommendations(runId: string, origins: string[] = ["2019"]) {
+  return {
+    schemaVersion: "1.0.0",
+    runId,
+    recommendations: origins.map((origin) => ({
+      origin,
+      method: "chain_ladder" as const,
+      reasons: [
+        { text: `Recommended for ${origin}.`, citations: [`dx:${runId}:ave:${origin}`] },
+      ],
+    })),
+  };
+}
+
+/** Seed a `complete` run carrying a ResultSet + DiagnosticsBundle (interpretable). */
+async function seedInterpretableRun(
+  t: Harness,
+  { workspaceId = "org_A" } = {},
+): Promise<Id<"runs">> {
+  const triangleId = await seedValidatedTriangle(t, workspaceId);
+  return await t.run((ctx) =>
+    ctx.db.insert("runs", {
+      workspaceId,
+      triangleId,
+      triangleHash: TRIANGLE_HASH,
+      status: "complete",
+      parameters: { methods: ["chain_ladder"], aprioriLossRatios: [] },
+      createdBy: "user_seed",
+      createdAt: "2026-07-18T00:00:00.000Z",
+      resultSet: makeResultSet(TRIANGLE_HASH),
+      diagnosticsBundle: makeDiagnosticsBundle("seed", TRIANGLE_HASH),
+      completedAt: "2026-07-18T02:00:00.000Z",
+    }),
+  );
+}
+
+const SAMPLE_ATTEMPTS = [
+  { transcript: { messages: [{ role: "user", content: "go" }], toolCalls: [] }, rejections: [] },
+];
+
+describe("storeRecommendations — persistence + audit (AC-2, AC-3)", () => {
+  test("persists on a complete run + appends run.recommended with the transcript", async () => {
+    const t = initConvexTest();
+    const runId = await seedInterpretableRun(t);
+    const recommendations = makeRecommendations(runId);
+
+    await t.mutation(internal.runs.storeRecommendations, {
+      runId,
+      workspaceId: "org_A",
+      actor: "user_a",
+      recommendations,
+      transcript: SAMPLE_ATTEMPTS,
+    });
+
+    const run = await getRun(t, runId);
+    expect(run?.recommendations).toEqual(recommendations);
+    const audits = (await auditRows(t)).filter((a) => a.eventType === "run.recommended");
+    expect(audits).toHaveLength(1);
+    expect(audits[0].runId).toBe(runId);
+    expect(audits[0].payload).toMatchObject({ runId, originCount: 1 });
+    expect(audits[0].payload.transcript).toEqual(SAMPLE_ATTEMPTS);
+  });
+
+  test("no-op on a non-complete run (guarded)", async () => {
+    const t = initConvexTest();
+    const triangleId = await seedValidatedTriangle(t);
+    const runId = await seedRun(t, triangleId, "running");
+
+    await t.mutation(internal.runs.storeRecommendations, {
+      runId,
+      workspaceId: "org_A",
+      actor: "user_a",
+      recommendations: makeRecommendations(runId),
+      transcript: SAMPLE_ATTEMPTS,
+    });
+
+    const run = await getRun(t, runId);
+    expect(run?.recommendations).toBeUndefined();
+    expect((await auditRows(t)).filter((a) => a.eventType === "run.recommended")).toHaveLength(0);
+  });
+
+  test("no-op on a cross-tenant workspace mismatch", async () => {
+    const t = initConvexTest();
+    const runId = await seedInterpretableRun(t, { workspaceId: "org_A" });
+    await t.mutation(internal.runs.storeRecommendations, {
+      runId,
+      workspaceId: "org_B",
+      actor: "user_b",
+      recommendations: makeRecommendations(runId),
+      transcript: SAMPLE_ATTEMPTS,
+    });
+    expect((await getRun(t, runId))?.recommendations).toBeUndefined();
+  });
+
+  test("a runId mismatch throws RECOMMENDATIONS_RUN_MISMATCH (never stored)", async () => {
+    const t = initConvexTest();
+    const runId = await seedInterpretableRun(t);
+    let code: string | undefined;
+    try {
+      await t.mutation(internal.runs.storeRecommendations, {
+        runId,
+        workspaceId: "org_A",
+        actor: "user_a",
+        recommendations: makeRecommendations("some-other-run"),
+        transcript: SAMPLE_ATTEMPTS,
+      });
+    } catch (error) {
+      code = (error as ConvexError<{ code: string }>).data.code;
+    }
+    expect(code).toBe("RECOMMENDATIONS_RUN_MISMATCH");
+    expect((await getRun(t, runId))?.recommendations).toBeUndefined();
+  });
+
+  test("a schema-invalid document throws at the arg boundary (AD-10 gate)", async () => {
+    const t = initConvexTest();
+    const runId = await seedInterpretableRun(t);
+    // `method` is not one of the three literals → arg validation rejects it.
+    const invalid = {
+      schemaVersion: "1.0.0",
+      runId,
+      recommendations: [{ origin: "2019", method: "not_a_method", reasons: [] }],
+    };
+    await expect(
+      t.mutation(internal.runs.storeRecommendations, {
+        runId,
+        workspaceId: "org_A",
+        actor: "user_a",
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        recommendations: invalid as any,
+        transcript: SAMPLE_ATTEMPTS,
+      }),
+    ).rejects.toThrow();
+    expect((await getRun(t, runId))?.recommendations).toBeUndefined();
+  });
+});
+
+describe("recordInterpretationRejection — failed interpretation audit (AC-2)", () => {
+  test("appends run.interpretationRejected and persists NO recommendations", async () => {
+    const t = initConvexTest();
+    const runId = await seedInterpretableRun(t);
+
+    await t.mutation(internal.runs.recordInterpretationRejection, {
+      runId,
+      workspaceId: "org_A",
+      actor: "user_a",
+      transcript: SAMPLE_ATTEMPTS,
+      rejections: "interpretation failed after 3 attempts",
+    });
+
+    const audits = (await auditRows(t)).filter(
+      (a) => a.eventType === "run.interpretationRejected",
+    );
+    expect(audits).toHaveLength(1);
+    expect(audits[0].payload).toMatchObject({ runId });
+    expect((await getRun(t, runId))?.recommendations).toBeUndefined();
+  });
+});
+
+describe("getRecommendations + getRun.hasRecommendations (AC-3)", () => {
+  test("returns the stored document for a member; getRun exposes hasRecommendations", async () => {
+    const t = initConvexTest();
+    const runId = await seedInterpretableRun(t);
+    const recommendations = makeRecommendations(runId);
+    await t.mutation(internal.runs.storeRecommendations, {
+      runId,
+      workspaceId: "org_A",
+      actor: "user_a",
+      recommendations,
+      transcript: SAMPLE_ATTEMPTS,
+    });
+
+    const got = await t
+      .withIdentity(analystA)
+      .query(api.runs.getRecommendations, { workspaceId: "org_A", runId });
+    expect(got).toEqual(recommendations);
+
+    const lean = await t
+      .withIdentity(analystA)
+      .query(api.runs.getRun, { workspaceId: "org_A", runId });
+    expect(lean?.hasRecommendations).toBe(true);
+  });
+
+  test("cross-tenant read returns null (existence not leaked)", async () => {
+    const t = initConvexTest();
+    const runId = await seedInterpretableRun(t, { workspaceId: "org_A" });
+    const got = await t
+      .withIdentity(analystB)
+      .query(api.runs.getRecommendations, { workspaceId: "org_B", runId });
+    expect(got).toBeNull();
+  });
+
+  test("hasRecommendations is false before any interpretation", async () => {
+    const t = initConvexTest();
+    const runId = await seedInterpretableRun(t);
+    const lean = await t
+      .withIdentity(analystA)
+      .query(api.runs.getRun, { workspaceId: "org_A", runId });
+    expect(lean?.hasRecommendations).toBe(false);
+  });
+});
+
+describe("generateRecommendations action — persist / audit / fail-closed (AC-2, AC-3, AD-9)", () => {
+  beforeEach(() => {
+    vi.stubEnv("ENGINE_SERVICE_URL", "http://engine.test");
+    vi.stubEnv("ENGINE_SERVICE_SECRET", "test-secret");
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  test("accepted → persists the document + audits the transcript", async () => {
+    const t = initConvexTest();
+    const runId = await seedInterpretableRun(t);
+    const engineResponse = {
+      status: "accepted",
+      recommendations: makeRecommendations(runId),
+      attempts: SAMPLE_ATTEMPTS,
+      rejectionSummary: null,
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(engineResponse));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const out = await t
+      .withIdentity(analystA)
+      .action(api.runs.generateRecommendations, { workspaceId: "org_A", runId });
+
+    expect(out).toEqual({ status: "accepted" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("http://engine.test/recommendations");
+    const body = JSON.parse((init as RequestInit).body as string);
+    expect(body.runId).toBe(runId);
+    expect(body.resultSet).toBeDefined();
+    expect(body.diagnosticsBundle).toBeDefined();
+
+    expect((await getRun(t, runId))?.recommendations).toEqual(makeRecommendations(runId));
+    const audits = (await auditRows(t)).filter((a) => a.eventType === "run.recommended");
+    expect(audits).toHaveLength(1);
+  });
+
+  test("rejected → audits run.interpretationRejected, persists no recommendations", async () => {
+    const t = initConvexTest();
+    const runId = await seedInterpretableRun(t);
+    const engineResponse = {
+      status: "rejected",
+      recommendations: null,
+      attempts: SAMPLE_ATTEMPTS,
+      rejectionSummary: "interpretation failed after 3 attempts",
+    };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(engineResponse)));
+
+    const out = await t
+      .withIdentity(analystA)
+      .action(api.runs.generateRecommendations, { workspaceId: "org_A", runId });
+
+    expect(out).toEqual({ status: "rejected" });
+    expect((await getRun(t, runId))?.recommendations).toBeUndefined();
+    const audits = (await auditRows(t)).filter(
+      (a) => a.eventType === "run.interpretationRejected",
+    );
+    expect(audits).toHaveLength(1);
+  });
+
+  test("engine model_unavailable propagates as engine.model_unavailable (AD-9)", async () => {
+    const t = initConvexTest();
+    const runId = await seedInterpretableRun(t);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse(
+          { code: "model_unavailable", message: "not configured" },
+          503,
+        ),
+      ),
+    );
+
+    let code: string | undefined;
+    try {
+      await t
+        .withIdentity(analystA)
+        .action(api.runs.generateRecommendations, { workspaceId: "org_A", runId });
+    } catch (error) {
+      code = (error as ConvexError<{ code: string }>).data.code;
+    }
+    expect(code).toBe("engine.model_unavailable");
+    expect((await getRun(t, runId))?.recommendations).toBeUndefined();
+  });
+
+  test("a non-interpretable run is RUN_NOT_INTERPRETABLE (no engine call)", async () => {
+    const t = initConvexTest();
+    const triangleId = await seedValidatedTriangle(t);
+    const runId = await seedRun(t, triangleId, "running");
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    let code: string | undefined;
+    try {
+      await t
+        .withIdentity(analystA)
+        .action(api.runs.generateRecommendations, { workspaceId: "org_A", runId });
+    } catch (error) {
+      code = (error as ConvexError<{ code: string }>).data.code;
+    }
+    expect(code).toBe("RUN_NOT_INTERPRETABLE");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  test("unauthenticated is rejected before the engine call (AD-4)", async () => {
+    const t = initConvexTest();
+    const runId = await seedInterpretableRun(t);
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    let code: string | undefined;
+    try {
+      await t.action(api.runs.generateRecommendations, { workspaceId: "org_A", runId });
+    } catch (error) {
+      code = (error as ConvexError<{ code: string }>).data.code;
+    }
+    expect(code).toBe("UNAUTHENTICATED");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});

@@ -2,6 +2,7 @@ import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 import {
   diagnosticsBundleValidator,
+  recommendationsValidator,
   resultSetValidator,
   runParametersValidator,
   triangleValidator,
@@ -129,6 +130,14 @@ export default defineSchema({
     // args are validated at the boundary).
     resultSet: v.optional(resultSetValidator),
     diagnosticsBundle: v.optional(diagnosticsBundleValidator),
+    // Story 5.3: the accepted Method-recommendation document (FR-10), machine-
+    // drafted through the Provenance Gate + structural validator, persisted
+    // inline exactly like resultSet/diagnosticsBundle (no child table — same
+    // pattern, "document linked to the Run" is the row itself). Typed by the
+    // shared engine-contract validator, so a schema-invalid document can never
+    // be stored (storeRecommendations's arg is validated at the boundary, AD-10).
+    // Absent until generateRecommendations succeeds; overwritten by a re-run.
+    recommendations: v.optional(recommendationsValidator),
     // The failure reason, set at `failed` (engine error or a validation/hash
     // mismatch surfaced via onRunComplete).
     error: v.optional(v.object({ code: v.string(), message: v.string() })),

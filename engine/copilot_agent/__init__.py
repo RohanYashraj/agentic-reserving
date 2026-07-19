@@ -23,6 +23,13 @@ from copilot_agent.agent import (
     build_interpretation_agent,
     run_interpretation,
 )
+from copilot_agent.recommendations import (
+    DraftParseError,
+    MethodRecommendationDraft,
+    RecommendationDraft,
+    build_recommendation_prompt,
+    parse_recommendation_draft,
+)
 from copilot_agent.tools import build_read_tools
 from copilot_agent.transcript import (
     ToolCallRecord,
@@ -32,14 +39,19 @@ from copilot_agent.transcript import (
 )
 
 __all__ = [
+    "DraftParseError",
     "InterpretationResult",
+    "MethodRecommendationDraft",
     "ModelNotConfiguredError",
+    "RecommendationDraft",
     "ToolCallRecord",
     "Transcript",
     "TranscriptMessage",
     "build_gemini_model",
     "build_interpretation_agent",
     "build_read_tools",
+    "build_recommendation_prompt",
     "build_transcript",
+    "parse_recommendation_draft",
     "run_interpretation",
 ]

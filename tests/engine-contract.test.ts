@@ -16,6 +16,7 @@ import { v } from "convex/values";
 import {
   diagnosticsBundleValidator,
   reDerivationReportValidator,
+  recommendationsValidator,
   resultSetValidator,
   triangleValidator,
   validationReportValidator,
@@ -36,6 +37,7 @@ const diagnosticsBundleSchema = readSchema("diagnostics-bundle.schema.json");
 const triangleSchema = readSchema("triangle.schema.json");
 const validationReportSchema = readSchema("validation-report.schema.json");
 const reDerivationReportSchema = readSchema("rederivation-report.schema.json");
+const recommendationsSchema = readSchema("recommendations.schema.json");
 
 describe("AD-10 cross-runtime drift check", () => {
   it("ResultSet: committed JSON Schema matches the Convex validator", () => {
@@ -78,6 +80,18 @@ describe("AD-10 cross-runtime drift check", () => {
       reDerivationReportSchema,
     );
     const fromValidator = validatorToCanonical(reDerivationReportValidator);
+    expect(diffCanonical(fromSchema, fromValidator)).toEqual([]);
+  });
+
+  it("Recommendations: committed JSON Schema matches the Convex validator", () => {
+    // Story 5.3: the accepted /recommendations document persisted on the run
+    // row. `method` is a string-literal union (the same three methods) —
+    // canonicalizes to an enum on both sides.
+    const fromSchema = jsonSchemaToCanonical(
+      recommendationsSchema,
+      recommendationsSchema,
+    );
+    const fromValidator = validatorToCanonical(recommendationsValidator);
     expect(diffCanonical(fromSchema, fromValidator)).toEqual([]);
   });
 });

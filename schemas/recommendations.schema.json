@@ -1,0 +1,83 @@
+{
+  "$defs": {
+    "MethodRecommendation": {
+      "description": "The recommended Method for one Origin Period, with cited reasons.\n\n``method`` reuses the SAME three Method literals as\n``RunParameters.methods`` / ``MethodResult.method`` (no new enum). There\nis exactly one ``MethodRecommendation`` per Origin Period in the Run;\n``reasons`` is non-empty (validated in ``validate_recommendations``).",
+      "properties": {
+        "method": {
+          "enum": [
+            "chain_ladder",
+            "bornhuetter_ferguson",
+            "mack"
+          ],
+          "title": "Method",
+          "type": "string"
+        },
+        "origin": {
+          "title": "Origin",
+          "type": "string"
+        },
+        "reasons": {
+          "items": {
+            "$ref": "#/$defs/RecommendationReason"
+          },
+          "title": "Reasons",
+          "type": "array"
+        }
+      },
+      "required": [
+        "origin",
+        "method",
+        "reasons"
+      ],
+      "title": "MethodRecommendation",
+      "type": "object"
+    },
+    "RecommendationReason": {
+      "description": "One reason a Method was recommended for an Origin Period.\n\n``text`` is the RENDERED reason string (post-gate: ``{{dx:...}}``\nplaceholders already rendered to citation markers, any ``{{rs:...}}``\nfigure rendered to its display value). ``citations`` is the tuple of\nresolved Diagnostic IDs the reason cites (\u22651 for a well-formed reason)\n\u2014 the machine-readable pin for the FR-10 \"each reason citing \u22651\nDiagnostic ID\" guarantee and Story 5.5's CitationChip. It is the\nresolved-``{{dx:...}}`` id list from the gate's ``GateAccepted.citations``,\nNEVER re-parsed from ``text``.",
+      "properties": {
+        "citations": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Citations",
+          "type": "array"
+        },
+        "text": {
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text",
+        "citations"
+      ],
+      "title": "RecommendationReason",
+      "type": "object"
+    }
+  },
+  "description": "The complete, self-describing recommendations document for one Run.\n\n``run_id`` is the correlation key (must equal the request's runId / the\nbundle's ``run_id``). The ``recommendations`` tuple carries exactly one\n``MethodRecommendation`` per Origin Period in the Run.",
+  "properties": {
+    "recommendations": {
+      "items": {
+        "$ref": "#/$defs/MethodRecommendation"
+      },
+      "title": "Recommendations",
+      "type": "array"
+    },
+    "runId": {
+      "title": "Runid",
+      "type": "string"
+    },
+    "schemaVersion": {
+      "default": "1.0.0",
+      "title": "Schemaversion",
+      "type": "string"
+    }
+  },
+  "required": [
+    "runId",
+    "recommendations"
+  ],
+  "title": "Recommendations",
+  "type": "object"
+}

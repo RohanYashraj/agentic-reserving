@@ -15,19 +15,26 @@ without touching the environment). Run locally with the factory flag:
     uv run uvicorn engine_service.app:create_app --factory
 """
 
+from collections.abc import Callable
+
+from agno.models.base import Model
 from fastapi import Depends, FastAPI
 from fastapi.responses import JSONResponse
 
+from copilot_agent import build_gemini_model
 from engine_service.auth import make_service_auth
 from engine_service.config import Settings, load_settings
 from engine_service.errors import register_exception_handlers
 from engine_service.models import (
     CanonicalizeResponse,
     ReDeriveRequest,
+    RecommendRequest,
+    RecommendResponse,
     RunRequest,
     RunResponse,
     ValidateRequest,
 )
+from engine_service.recommendations_flow import generate_recommendations
 from reserving_engine import (
     compute_diagnostics,
     rederive,
@@ -37,9 +44,21 @@ from reserving_engine import (
 )
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(
+    settings: Settings | None = None,
+    *,
+    build_model: Callable[[], Model] | None = None,
+) -> FastAPI:
     if settings is None:
         settings = load_settings()
+
+    # The model seam (AD-8): prod builds the Gemini model from config on each
+    # /recommendations request (so a missing key fails per-request into
+    # ModelNotConfiguredError → model_unavailable, never at boot — AD-9). Tests
+    # inject a scripted model via `build_model` without a live key.
+    if build_model is None:
+        def build_model() -> Model:
+            return build_gemini_model(settings.gemini_api_key, settings.gemini_model_id)
 
     app = FastAPI(title="engine_service", version="0.1.0")
     register_exception_handlers(app)
@@ -80,5 +99,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             request.triangle, request.stored_result_set, run_id=request.run_id
         )
         return JSONResponse(content=report.model_dump(mode="json", by_alias=True))
+
+    @app.post("/recommendations", dependencies=[auth])
+    def recommendations(request: RecommendRequest) -> JSONResponse:
+        # Story 5.3 (FR-10, AD-1/AD-5/AD-9): a thin adapter over the bounded
+        # generate-gate-validate loop — build the model (fails closed to
+        # model_unavailable if unconfigured), run the loop, serialize. Both the
+        # accepted and rejected arms return HTTP 200 with the transcript(s) for
+        # audit; ModelNotConfiguredError propagates to the error envelope (503).
+        model = build_model()
+        outcome = generate_recommendations(
+            model, request.result_set, request.diagnostics_bundle
+        )
+        response = RecommendResponse.from_outcome(request.run_id, outcome)
+        return JSONResponse(content=response.model_dump(mode="json", by_alias=True))
 
     return app
