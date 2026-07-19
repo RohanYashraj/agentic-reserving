@@ -25,6 +25,7 @@ import type {
 import {
   RESERVE_REPORT_SCHEMA_VERSION,
   diagnosticsBundleValidator,
+  methodValidator,
   reDerivationReportValidator,
   recommendationsValidator,
   reserveReportValidator,
@@ -35,7 +36,7 @@ import {
   citationsFromText,
   markersAreWellFormed,
 } from "./lib/citationMarker";
-import { requireMember } from "./lib/guards";
+import { requireMember, requireRole } from "./lib/guards";
 import { workflow } from "./workflow";
 
 // Story 4.1 — Run configuration (FR-4, AD-7): createRun creates the job record.
@@ -591,6 +592,168 @@ export const getRecommendations = query({
     const run = await ctx.db.get(runId);
     if (run === null || run.workspaceId !== workspaceId) return null;
     return run.recommendations ?? null;
+  },
+});
+
+/**
+ * Override a per-Origin-Period Method recommendation (Story 6.3, FR-10, UX-DR11).
+ * The FIRST production caller of `requireRole(ctx, workspaceId, "senior_actuary")`
+ * (D2/AD-4) — approve/publish/override are the Senior-Actuary-gated paths. An
+ * Analyst's call is rejected SERVER-SIDE with `FORBIDDEN` (never UI-hiding alone);
+ * `requireRole` calls `requireMember` internally, so unauthenticated / cross-
+ * workspace callers are rejected there first.
+ *
+ * An override is a HUMAN judgment, not machine-drafted content — it calls NO
+ * engine endpoint and is NEVER re-run through the Provenance Gate (AD-5). The
+ * only checks are input integrity (origin exists, non-empty reason, method ≠ the
+ * recommendation). It INSERTS an append-only row into the product-plane
+ * `recommendationOverrides` table (D1) — the drift-checked `runs.recommendations`
+ * engine document is NEVER mutated (AD-10). The reason rides verbatim in the
+ * `recommendation.overridden` audit payload (D3 — FR-10's explicit testable
+ * consequence, unlike the lean `report.*` audits). No arithmetic (AD-1).
+ *
+ * No optimistic UI: returns null; the client re-reads via the
+ * `getRecommendationOverrides` subscription on server ack (AC-2/D6/D9).
+ */
+export const overrideRecommendation = mutation({
+  args: {
+    workspaceId: v.string(),
+    runId: v.id("runs"),
+    origin: v.string(),
+    overridingMethod: methodValidator,
+    reason: v.string(),
+  },
+  returns: v.null(),
+  handler: async (
+    ctx,
+    { workspaceId, runId, origin, overridingMethod, reason },
+  ) => {
+    // AD-4/D2: the role gate FIRST (calls requireMember internally). An Analyst
+    // is rejected here with FORBIDDEN — the server is the authority, not the UI.
+    const { identity } = await requireRole(ctx, workspaceId, "senior_actuary");
+    const actor = identity.subject;
+
+    // Tenancy + existence. Same code for wrong-workspace and absent — existence
+    // never leaks (mirrors getRecommendations's re-check).
+    const run = await ctx.db.get(runId);
+    if (run === null || run.workspaceId !== workspaceId) {
+      throw new ConvexError({
+        code: "RUN_NOT_FOUND",
+        message: "That Run does not exist in this Workspace.",
+      });
+    }
+
+    // Can't override before there are recommendations to override.
+    if (run.recommendations == null) {
+      throw new ConvexError({
+        code: "RUN_NOT_INTERPRETED",
+        message: "This Run has no recommendations to override.",
+      });
+    }
+
+    // The origin must name an actual machine recommendation on this Run.
+    const matched = run.recommendations.recommendations.find(
+      (rec) => rec.origin === origin,
+    );
+    if (matched === undefined) {
+      throw new ConvexError({
+        code: "ORIGIN_NOT_FOUND",
+        message: "No recommendation exists for that Origin Period.",
+      });
+    }
+    const recommendedMethod = matched.method;
+
+    // Input integrity, NOT the Provenance Gate (D3/AD-5). The reason is required.
+    const trimmedReason = reason.trim();
+    if (trimmedReason.length === 0) {
+      throw new ConvexError({
+        code: "REASON_REQUIRED",
+        message: "An override requires a recorded reason.",
+      });
+    }
+
+    // Overriding to the already-recommended method is meaningless — the client
+    // picker excludes it; this is the server backstop (D4).
+    if (overridingMethod === recommendedMethod) {
+      throw new ConvexError({
+        code: "OVERRIDE_MATCHES_RECOMMENDATION",
+        message:
+          "The overriding Method must differ from the recommended Method.",
+      });
+    }
+
+    // APPEND-ONLY insert (D1) — never patch/delete. Repo clock convention
+    // (never a clock in the engine).
+    await ctx.db.insert("recommendationOverrides", {
+      workspaceId,
+      runId,
+      origin,
+      overridingMethod,
+      reason: trimmedReason,
+      overriddenBy: actor,
+      overriddenAt: new Date(Date.now()).toISOString(),
+    });
+
+    // Sole audit writer (AD-6). The reason IS in the payload (D3/FR-10).
+    await appendAuditEntryInTransaction(ctx, {
+      workspaceId,
+      actor,
+      eventType: "recommendation.overridden",
+      runId,
+      payload: {
+        runId,
+        origin,
+        recommendedMethod,
+        overridingMethod,
+        reason: trimmedReason,
+      },
+    });
+
+    return null;
+  },
+});
+
+/**
+ * The override rows for one Run (Story 6.3, D9) — the reactive read surface the
+ * Interpretation tab subscribes to (gated on `run.hasRecommendations`, exactly
+ * like getRecommendations). `requireMember` FIRST: viewing overrides is
+ * member-level (the display is not Senior-Actuary-gated; only the WRITE is,
+ * D2/D7). Tenancy re-check returns `[]` for a row outside this Workspace — no
+ * existence leak.
+ *
+ * Returns ALL overrides (append-only history), newest-first (`overriddenAt`
+ * desc — ISO string sort is chronological); the client displays the LATEST per
+ * origin (D4) and could surface the full history later. Lean projection — no
+ * figures (AD-1); an override records a categorical Method + human prose only.
+ */
+export const getRecommendationOverrides = query({
+  args: { workspaceId: v.string(), runId: v.id("runs") },
+  returns: v.array(
+    v.object({
+      origin: v.string(),
+      overridingMethod: methodValidator,
+      reason: v.string(),
+      overriddenBy: v.string(),
+      overriddenAt: v.string(),
+    }),
+  ),
+  handler: async (ctx, { workspaceId, runId }) => {
+    await requireMember(ctx, workspaceId);
+    const run = await ctx.db.get(runId);
+    if (run === null || run.workspaceId !== workspaceId) return [];
+    const rows = await ctx.db
+      .query("recommendationOverrides")
+      .withIndex("by_run", (q) => q.eq("runId", runId))
+      .collect();
+    return rows
+      .map((r) => ({
+        origin: r.origin,
+        overridingMethod: r.overridingMethod,
+        reason: r.reason,
+        overriddenBy: r.overriddenBy,
+        overriddenAt: r.overriddenAt,
+      }))
+      .sort((a, b) => b.overriddenAt.localeCompare(a.overriddenAt));
   },
 });
 

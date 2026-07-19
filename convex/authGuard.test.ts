@@ -80,6 +80,20 @@ const publicFunctionArgs: Record<string, Record<string, unknown>> = {
   "runs:getResultSet": { workspaceId: "org_test" },
   "runs:getDiagnosticsBundle": { workspaceId: "org_test" },
   "runs:getRecommendations": { workspaceId: "org_test" },
+  // Story 6.3 — the two new public override functions, both taking a v.id("runs")
+  // (real runId injected below). overrideRecommendation also validates origin +
+  // overridingMethod (methodValidator) + reason before the guard, so supply them.
+  // It is requireRole(senior_actuary), but requireRole calls requireMember first,
+  // so an unauthenticated caller is still rejected with UNAUTHENTICATED (the role
+  // rejection is proven separately in convex/runs.test.ts). getRecommendationOverrides
+  // is a requireMember query (workspaceId + runId).
+  "runs:overrideRecommendation": {
+    workspaceId: "org_test",
+    origin: "2020",
+    overridingMethod: "bornhuetter_ferguson",
+    reason: "test",
+  },
+  "runs:getRecommendationOverrides": { workspaceId: "org_test" },
   "runs:getReserveReport": { workspaceId: "org_test" },
   "runs:retryRun": { workspaceId: "org_test" },
   // rederiveRun (Story 4.7) is a public ACTION; requireMember is its first
@@ -274,6 +288,8 @@ describe("auth-guard enumeration (NFR-3)", () => {
         path === "runs:getResultSet" ||
         path === "runs:getDiagnosticsBundle" ||
         path === "runs:getRecommendations" ||
+        path === "runs:overrideRecommendation" ||
+        path === "runs:getRecommendationOverrides" ||
         path === "runs:getReserveReport" ||
         path === "runs:retryRun" ||
         path === "runs:rederiveRun" ||

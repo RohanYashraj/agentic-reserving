@@ -4,6 +4,7 @@ import { useEffect, useState, type ReactNode } from "react";
 
 import { DiagnosticsPanels } from "@/components/DiagnosticsPanels";
 import { InterpretationTab } from "@/components/interpretation/InterpretationTab";
+import type { RecommendationOverride } from "@/components/interpretation/RecommendationTable";
 import { RederivationPanel } from "@/components/RederivationPanel";
 import { ReportTab, type ReportSections } from "@/components/report/ReportTab";
 import type { SeniorActuary } from "@/components/report/ReportApprovalBar";
@@ -98,6 +99,9 @@ export function RunDetail({
   onSubmitForReview,
   seniorActuaries = [],
   engineOnly = false,
+  overrides = [],
+  canOverride = false,
+  onOverride,
 }: {
   run: RunView;
   resultSet?: ResultSet | null;
@@ -135,6 +139,17 @@ export function RunDetail({
   // (client-side Clerk, D4). Optional so the surface degrades where unwired.
   onSubmitForReview?: (assignee: string | null) => Promise<void>;
   seniorActuaries?: SeniorActuary[];
+  // Story 6.3: the Senior-Actuary override surface, threaded to InterpretationTab.
+  // `overrides` defaults to [] so pre-6.3 call sites / the placeholder path
+  // degrade cleanly (the interpretation tab still renders without override
+  // capability); `canOverride` gates the live-vs-disabled control (D7).
+  overrides?: RecommendationOverride[];
+  canOverride?: boolean;
+  onOverride?: (
+    origin: string,
+    overridingMethod: Method,
+    reason: string,
+  ) => Promise<void>;
 }) {
   const [tab, setTab] = useState<TabKey>("results");
   const [retrying, setRetrying] = useState(false);
@@ -343,6 +358,9 @@ export function RunDetail({
               diagnosticsBundle={diagnosticsBundle ?? null}
               onGenerateInterpretation={onGenerateInterpretation}
               engineOnly={engineOnly}
+              overrides={overrides}
+              canOverride={canOverride}
+              onOverride={onOverride}
             />
           ) : (
             <TabPlaceholder>

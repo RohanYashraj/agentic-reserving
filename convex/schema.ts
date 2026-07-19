@@ -2,6 +2,7 @@ import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 import {
   diagnosticsBundleValidator,
+  methodValidator,
   recommendationsValidator,
   reserveReportValidator,
   resultSetValidator,
@@ -235,6 +236,30 @@ export default defineSchema({
     // One report per run in 5.4 (re-draft overwrites); Epic 6 versions.
     .index("by_run", ["runId"])
     // Review-queue / dashboard listing (Epic 6/7).
+    .index("by_workspace", ["workspaceId"]),
+
+  // Story 6.3 Senior-Actuary overrides (FR-10, UX-DR11). APPEND-ONLY on the data
+  // plane — an override is inserted, never patched/deleted; history is never
+  // erased (the LATEST per (runId, origin) is the current override, prior ones
+  // remain as history + in the audit log). A separate product-plane table so the
+  // drift-checked `runs.recommendations` engine document stays immutable (AD-10)
+  // and a machine re-run of `generateRecommendations` never clobbers human
+  // overrides. Mirrors the `reserveReports` separate-human-artifact precedent
+  // (D1). `overridingMethod` reuses the engine-contract `methodValidator` (the
+  // same three literals as the Run's methods — no separate enum; no drift, it is
+  // already the contract's own type).
+  recommendationOverrides: defineTable({
+    workspaceId: v.string(), // Clerk org ID — the Workspace (AD-4 scoping)
+    runId: v.id("runs"), // the Run whose recommendation is overridden
+    origin: v.string(), // the Origin Period of the overridden recommendation
+    overridingMethod: methodValidator, // the Method the Senior Actuary chose instead
+    reason: v.string(), // the recorded human reason (FR-10 — carried into the audit)
+    overriddenBy: v.string(), // Clerk user id (identity.subject) of the Senior Actuary
+    overriddenAt: v.string(), // ISO-8601 UTC
+  })
+    // Per-Run override history (query + latest-per-origin derivation, D9).
+    .index("by_run", ["runId"])
+    // Tenancy scan / Workspace listing.
     .index("by_workspace", ["workspaceId"]),
 
   // Engine-Only Mode state (Story 5.6, AD-9, D2). The per-Workspace, durable,

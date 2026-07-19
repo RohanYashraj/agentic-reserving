@@ -2,7 +2,10 @@
 
 import { useState } from "react";
 
-import { RecommendationTable } from "@/components/interpretation/RecommendationTable";
+import {
+  RecommendationTable,
+  type RecommendationOverride,
+} from "@/components/interpretation/RecommendationTable";
 import type { RunView } from "@/components/RunDetail";
 import {
   Tooltip,
@@ -12,6 +15,7 @@ import {
 } from "@/components/ui/tooltip";
 import type {
   DiagnosticsBundle,
+  Method,
   Recommendations,
 } from "@/convex/lib/engineContract";
 
@@ -136,6 +140,9 @@ export function InterpretationTab({
   diagnosticsBundle,
   onGenerateInterpretation,
   engineOnly = false,
+  overrides = [],
+  canOverride = false,
+  onOverride,
 }: {
   run: RunView;
   recommendations: Recommendations | null;
@@ -146,6 +153,16 @@ export function InterpretationTab({
   // Story 5.6: the workspace-global Engine-Only Mode flag (run-scoped mirror).
   // Default false so pre-5.6 tests + the placeholder fallback still render.
   engineOnly?: boolean;
+  // Story 6.3: the Senior-Actuary override surface — passed straight through to
+  // RecommendationTable in the accepted branch. Optional/defaulted so pre-6.3
+  // call sites render without override capability.
+  overrides?: RecommendationOverride[];
+  canOverride?: boolean;
+  onOverride?: (
+    origin: string,
+    overridingMethod: Method,
+    reason: string,
+  ) => Promise<void>;
 }) {
   // Transient UI only — the durable outcome is the subscription (see below).
   const [generating, setGenerating] = useState(false);
@@ -196,6 +213,9 @@ export function InterpretationTab({
         <RecommendationTable
           recommendations={recommendations}
           diagnosticsBundle={diagnosticsBundle}
+          overrides={overrides}
+          canOverride={canOverride}
+          onOverride={onOverride}
         />
       </div>
     );

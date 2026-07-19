@@ -40,6 +40,18 @@ function initConvexTest(): Harness {
 
 const analystA = { subject: "user_a", org_id: "org_A", org_role: "org:analyst" };
 const analystB = { subject: "user_b", org_id: "org_B", org_role: "org:analyst" };
+// Story 6.3: Senior-Actuary identities for the requireRole(senior_actuary)
+// override path (D2). Role lives ONLY in the Clerk JWT (org_role), never a table.
+const seniorA = {
+  subject: "user_senior",
+  org_id: "org_A",
+  org_role: "org:senior_actuary",
+};
+const seniorB = {
+  subject: "user_senior_b",
+  org_id: "org_B",
+  org_role: "org:senior_actuary",
+};
 
 const ACCEPTED_TRIANGLE = {
   kind: "paid" as const,
@@ -1695,6 +1707,303 @@ describe("getRecommendations + getRun.hasRecommendations (AC-3)", () => {
       .withIdentity(analystA)
       .query(api.runs.getRun, { workspaceId: "org_A", runId });
     expect(lean?.hasRecommendations).toBe(false);
+  });
+});
+
+// --- Story 6.3: Senior-Actuary recommendation override (FR-10, UX-DR11) -------
+
+/** A `complete` run carrying a machine Recommendations document (interpretable +
+ *  interpreted) — the precondition for an override. */
+async function seedRecommendedRun(
+  t: Harness,
+  { workspaceId = "org_A", origins = ["2019"] } = {},
+): Promise<Id<"runs">> {
+  const runId = await seedInterpretableRun(t, { workspaceId });
+  await t.run((ctx) =>
+    ctx.db.patch(runId, {
+      recommendations: makeRecommendations(runId as string, origins),
+    }),
+  );
+  return runId;
+}
+
+async function overrideRows(t: Harness) {
+  return await t.run((ctx) =>
+    ctx.db.query("recommendationOverrides").collect(),
+  );
+}
+
+async function overrideErrorCode(promise: Promise<unknown>): Promise<string> {
+  try {
+    await promise;
+  } catch (error) {
+    return (error as ConvexError<{ code: string }>).data.code;
+  }
+  throw new Error("expected the override to throw");
+}
+
+describe("overrideRecommendation — role gate + append-only override (AC-1, AC-2)", () => {
+  test("senior_actuary override inserts a row + audits with the reason; runs.recommendations unchanged", async () => {
+    const t = initConvexTest();
+    const runId = await seedRecommendedRun(t, { origins: ["2019"] });
+    const before = (await getRun(t, runId))?.recommendations;
+
+    const out = await t.withIdentity(seniorA).mutation(
+      api.runs.overrideRecommendation,
+      {
+        workspaceId: "org_A",
+        runId,
+        origin: "2019",
+        overridingMethod: "bornhuetter_ferguson",
+        // Leading/trailing whitespace is trimmed on store (D3).
+        reason: "  Immature year; a priori is better grounded.  ",
+      },
+    );
+    expect(out).toBeNull();
+
+    const rows = await overrideRows(t);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      workspaceId: "org_A",
+      runId,
+      origin: "2019",
+      overridingMethod: "bornhuetter_ferguson",
+      reason: "Immature year; a priori is better grounded.",
+      overriddenBy: "user_senior",
+    });
+    expect(typeof rows[0].overriddenAt).toBe("string");
+
+    // The reason IS in the audit payload (D3/FR-10 — unlike the lean report.* audits).
+    const audits = (await auditRows(t)).filter(
+      (a) => a.eventType === "recommendation.overridden",
+    );
+    expect(audits).toHaveLength(1);
+    expect(audits[0].runId).toBe(runId);
+    expect(audits[0].actor).toBe("user_senior");
+    expect(audits[0].payload).toMatchObject({
+      runId,
+      origin: "2019",
+      recommendedMethod: "chain_ladder",
+      overridingMethod: "bornhuetter_ferguson",
+      reason: "Immature year; a priori is better grounded.",
+    });
+
+    // The drift-checked engine document is byte-identical (D1/AD-10 — never mutated).
+    expect((await getRun(t, runId))?.recommendations).toEqual(before);
+  });
+
+  test("an analyst override is FORBIDDEN server-side — no row, no audit (AC-1/D2)", async () => {
+    const t = initConvexTest();
+    const runId = await seedRecommendedRun(t, { origins: ["2019"] });
+
+    const code = await overrideErrorCode(
+      t.withIdentity(analystA).mutation(api.runs.overrideRecommendation, {
+        workspaceId: "org_A",
+        runId,
+        origin: "2019",
+        overridingMethod: "bornhuetter_ferguson",
+        reason: "should be rejected",
+      }),
+    );
+    expect(code).toBe("FORBIDDEN");
+    expect(await overrideRows(t)).toHaveLength(0);
+    expect(
+      (await auditRows(t)).filter(
+        (a) => a.eventType === "recommendation.overridden",
+      ),
+    ).toHaveLength(0);
+  });
+
+  test("unauthenticated is rejected", async () => {
+    const t = initConvexTest();
+    const runId = await seedRecommendedRun(t);
+    const code = await overrideErrorCode(
+      t.mutation(api.runs.overrideRecommendation, {
+        workspaceId: "org_A",
+        runId,
+        origin: "2019",
+        overridingMethod: "bornhuetter_ferguson",
+        reason: "x",
+      }),
+    );
+    expect(code).toBe("UNAUTHENTICATED");
+  });
+
+  test("cross-tenant / vanished run → RUN_NOT_FOUND (no existence leak)", async () => {
+    const t = initConvexTest();
+    const runId = await seedRecommendedRun(t, { workspaceId: "org_A" });
+    // A senior actuary of org_B naming org_A's run under their own workspace.
+    const code = await overrideErrorCode(
+      t.withIdentity(seniorB).mutation(api.runs.overrideRecommendation, {
+        workspaceId: "org_B",
+        runId,
+        origin: "2019",
+        overridingMethod: "bornhuetter_ferguson",
+        reason: "x",
+      }),
+    );
+    expect(code).toBe("RUN_NOT_FOUND");
+    expect(await overrideRows(t)).toHaveLength(0);
+  });
+
+  test("a run with no recommendations → RUN_NOT_INTERPRETED", async () => {
+    const t = initConvexTest();
+    const runId = await seedInterpretableRun(t); // complete, but no recommendations
+    const code = await overrideErrorCode(
+      t.withIdentity(seniorA).mutation(api.runs.overrideRecommendation, {
+        workspaceId: "org_A",
+        runId,
+        origin: "2019",
+        overridingMethod: "bornhuetter_ferguson",
+        reason: "x",
+      }),
+    );
+    expect(code).toBe("RUN_NOT_INTERPRETED");
+  });
+
+  test("a non-existent origin → ORIGIN_NOT_FOUND", async () => {
+    const t = initConvexTest();
+    const runId = await seedRecommendedRun(t, { origins: ["2019"] });
+    const code = await overrideErrorCode(
+      t.withIdentity(seniorA).mutation(api.runs.overrideRecommendation, {
+        workspaceId: "org_A",
+        runId,
+        origin: "2099",
+        overridingMethod: "bornhuetter_ferguson",
+        reason: "x",
+      }),
+    );
+    expect(code).toBe("ORIGIN_NOT_FOUND");
+  });
+
+  test("an empty/whitespace reason → REASON_REQUIRED", async () => {
+    const t = initConvexTest();
+    const runId = await seedRecommendedRun(t, { origins: ["2019"] });
+    const code = await overrideErrorCode(
+      t.withIdentity(seniorA).mutation(api.runs.overrideRecommendation, {
+        workspaceId: "org_A",
+        runId,
+        origin: "2019",
+        overridingMethod: "bornhuetter_ferguson",
+        reason: "   ",
+      }),
+    );
+    expect(code).toBe("REASON_REQUIRED");
+    expect(await overrideRows(t)).toHaveLength(0);
+  });
+
+  test("overridingMethod === recommendedMethod → OVERRIDE_MATCHES_RECOMMENDATION", async () => {
+    const t = initConvexTest();
+    const runId = await seedRecommendedRun(t, { origins: ["2019"] });
+    const code = await overrideErrorCode(
+      t.withIdentity(seniorA).mutation(api.runs.overrideRecommendation, {
+        workspaceId: "org_A",
+        runId,
+        origin: "2019",
+        overridingMethod: "chain_ladder", // == the recommended method
+        reason: "x",
+      }),
+    );
+    expect(code).toBe("OVERRIDE_MATCHES_RECOMMENDATION");
+    expect(await overrideRows(t)).toHaveLength(0);
+  });
+
+  test("re-override appends a SECOND row; both audit-logged; query returns both (D1/D4)", async () => {
+    const t = initConvexTest();
+    const runId = await seedRecommendedRun(t, { origins: ["2019"] });
+
+    await t.withIdentity(seniorA).mutation(api.runs.overrideRecommendation, {
+      workspaceId: "org_A",
+      runId,
+      origin: "2019",
+      overridingMethod: "bornhuetter_ferguson",
+      reason: "first",
+    });
+    await t.withIdentity(seniorA).mutation(api.runs.overrideRecommendation, {
+      workspaceId: "org_A",
+      runId,
+      origin: "2019",
+      overridingMethod: "mack",
+      reason: "changed my mind",
+    });
+
+    const rows = await overrideRows(t);
+    expect(rows).toHaveLength(2);
+    expect(rows.map((r) => r.overridingMethod).sort()).toEqual([
+      "bornhuetter_ferguson",
+      "mack",
+    ]);
+    expect(
+      (await auditRows(t)).filter(
+        (a) => a.eventType === "recommendation.overridden",
+      ),
+    ).toHaveLength(2);
+
+    // The query returns both, newest-first (non-increasing overriddenAt).
+    const got = await t
+      .withIdentity(analystA)
+      .query(api.runs.getRecommendationOverrides, {
+        workspaceId: "org_A",
+        runId,
+      });
+    expect(got).toHaveLength(2);
+    expect(got[0].overriddenAt >= got[1].overriddenAt).toBe(true);
+  });
+});
+
+describe("getRecommendationOverrides — member read + tenancy (AC-2/D9)", () => {
+  test("a member (analyst) reads the lean override projection", async () => {
+    const t = initConvexTest();
+    const runId = await seedRecommendedRun(t, { origins: ["2019"] });
+    await t.withIdentity(seniorA).mutation(api.runs.overrideRecommendation, {
+      workspaceId: "org_A",
+      runId,
+      origin: "2019",
+      overridingMethod: "bornhuetter_ferguson",
+      reason: "grounded",
+    });
+
+    const got = await t
+      .withIdentity(analystA)
+      .query(api.runs.getRecommendationOverrides, {
+        workspaceId: "org_A",
+        runId,
+      });
+    expect(got).toHaveLength(1);
+    expect(got[0]).toEqual({
+      origin: "2019",
+      overridingMethod: "bornhuetter_ferguson",
+      reason: "grounded",
+      overriddenBy: "user_senior",
+      overriddenAt: got[0].overriddenAt,
+    });
+    // Lean projection — no internal fields leak.
+    expect(got[0]).not.toHaveProperty("workspaceId");
+    expect(got[0]).not.toHaveProperty("runId");
+  });
+
+  test("a run with no overrides → []", async () => {
+    const t = initConvexTest();
+    const runId = await seedRecommendedRun(t);
+    const got = await t
+      .withIdentity(analystA)
+      .query(api.runs.getRecommendationOverrides, {
+        workspaceId: "org_A",
+        runId,
+      });
+    expect(got).toEqual([]);
+  });
+
+  test("cross-tenant read → [] (no existence leak)", async () => {
+    const t = initConvexTest();
+    const runId = await seedRecommendedRun(t, { workspaceId: "org_A" });
+    const got = await t
+      .withIdentity(analystB)
+      .query(api.runs.getRecommendationOverrides, {
+        workspaceId: "org_B",
+        runId,
+      });
+    expect(got).toEqual([]);
   });
 });
 

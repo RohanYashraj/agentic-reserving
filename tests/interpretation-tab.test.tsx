@@ -211,6 +211,34 @@ describe("InterpretationTab state machine (Story 5.5, AC1/AC4, UX-DR16)", () => 
     expect(screen.queryByRole("button", { name: /Generate interpretation/i })).toBeNull();
     expect(container.querySelectorAll(".animate-pulse")).toHaveLength(0);
   });
+
+  it("Story 6.3: threads overrides/canOverride/onOverride into the accepted table", () => {
+    render(
+      <InterpretationTab
+        run={makeRun({ hasRecommendations: true })}
+        recommendations={makeRecommendations()}
+        diagnosticsBundle={makeDiagnosticsBundle()}
+        onGenerateInterpretation={vi.fn()}
+        canOverride={true}
+        overrides={[
+          {
+            origin: "2019",
+            overridingMethod: "chain_ladder",
+            reason: "immature year",
+            overriddenBy: "user_senior",
+            overriddenAt: "2026-07-19T10:00:00.000Z",
+          },
+        ]}
+        onOverride={vi.fn()}
+      />,
+    );
+    // canOverride → the live Override control renders (a Senior Actuary).
+    const button = screen.getByRole("button", { name: "Change override" });
+    expect((button as HTMLButtonElement).disabled).toBe(false);
+    // The threaded override renders the overridden status tag + the quoted reason.
+    expect(screen.getByText("overridden")).toBeDefined();
+    expect(screen.getByText(/immature year/)).toBeDefined();
+  });
 });
 
 describe("InterpretationTab — Engine-Only Mode + durable failed state (Story 5.6, AC-3)", () => {

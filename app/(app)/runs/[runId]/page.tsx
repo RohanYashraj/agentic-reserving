@@ -11,6 +11,7 @@ import { RunDetail } from "@/components/RunDetail";
 import type { SeniorActuary } from "@/components/report/ReportApprovalBar";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import type { Method } from "@/convex/lib/engineContract";
 import { normalizeRole } from "@/convex/lib/guards";
 
 // Story 4.3 (AC1/2/3/5): the live Run-detail surface. useQuery(getRun) IS a
@@ -26,9 +27,13 @@ function errorMessage(error: unknown): string {
 }
 
 export default function RunDetailPage() {
-  const { orgId } = useAuth();
+  const { orgId, orgRole } = useAuth();
   const params = useParams<{ runId: string }>();
   const runId = params.runId as Id<"runs">;
+  // Story 6.3 (D7): the FIRST current-user-role client signal — is the signed-in
+  // user a Senior Actuary. DISPLAY gating only (the live-vs-disabled Override
+  // control); the server `requireRole` is the authority (AD-4).
+  const canOverride = normalizeRole(orgRole) === "senior_actuary";
 
   const run = useQuery(
     api.runs.getRun,
@@ -55,6 +60,14 @@ export default function RunDetailPage() {
   // reactively (FR-20, no polling), surviving reload.
   const recommendations = useQuery(
     api.runs.getRecommendations,
+    orgId && run?.hasRecommendations ? { workspaceId: orgId, runId } : "skip",
+  );
+  // Story 6.3: the Senior-Actuary overrides (D9). Gated on hasRecommendations
+  // exactly like getRecommendations — overrides only exist when recommendations
+  // do. On an override confirm the mutation inserts a row → this subscription
+  // re-emits → the table re-renders (no optimistic UI, reload-durable, FR-20).
+  const overrides = useQuery(
+    api.runs.getRecommendationOverrides,
     orgId && run?.hasRecommendations ? { workspaceId: orgId, runId } : "skip",
   );
   // Fifth subscription (Story 5.6): the workspace-global Engine-Only Mode. The
@@ -92,6 +105,10 @@ export default function RunDetailPage() {
   // getReserveReport subscription above (status flips to awaiting_review on
   // server ack — no optimistic UI, AC-2/D6).
   const submitReportForReview = useMutation(api.runs.submitReportForReview);
+  // Story 6.3: the Senior-Actuary override mutation. Its durable outcome is the
+  // getRecommendationOverrides subscription above (a row inserted on server ack —
+  // no optimistic UI, AC-2/D6/D9).
+  const overrideRecommendation = useMutation(api.runs.overrideRecommendation);
 
   // Story 6.2 (D4): the Senior-Actuary assignee picker source, built CLIENT-side
   // from Clerk memberships (Convex has no Clerk-backend seam). Roles are emitted
@@ -184,6 +201,29 @@ export default function RunDetailPage() {
     }
   }
 
+  async function onOverride(
+    origin: string,
+    overridingMethod: Method,
+    reason: string,
+  ) {
+    if (!orgId) throw new Error("No active Workspace.");
+    try {
+      // Returns null; the durable outcome lands via the getRecommendationOverrides
+      // subscription on server ack (no optimistic UI, AC-2/D9). Surface readable
+      // errors (FORBIDDEN / REASON_REQUIRED / ORIGIN_NOT_FOUND …) inline in the
+      // dialog.
+      await overrideRecommendation({
+        workspaceId: orgId,
+        runId,
+        origin,
+        overridingMethod,
+        reason,
+      });
+    } catch (err) {
+      throw new Error(errorMessage(err));
+    }
+  }
+
   async function onSubmitForReview(assignee: string | null) {
     if (!orgId) throw new Error("No active Workspace.");
     try {
@@ -244,6 +284,9 @@ export default function RunDetailPage() {
               onGenerateDraft={onGenerateDraft}
               onSubmitForReview={onSubmitForReview}
               seniorActuaries={seniorActuaries}
+              overrides={overrides ?? []}
+              canOverride={canOverride}
+              onOverride={onOverride}
             />
           </div>
         </>

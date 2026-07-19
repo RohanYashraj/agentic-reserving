@@ -402,6 +402,76 @@ describe("RunDetail (AC2, AC3, AC4)", () => {
     expect(rail.getByText(/Actual vs expected — 2019/i)).toBeDefined();
   });
 
+  it("Story 6.3: threads overrides/canOverride/onOverride to the accepted Interpretation table", () => {
+    render(
+      <RunDetail
+        run={makeRun({
+          status: "complete",
+          hasResults: true,
+          hasDiagnostics: true,
+          hasRecommendations: true,
+          completedAt: "2026-07-19T00:00:02.000Z",
+        })}
+        diagnosticsBundle={makeDiagnosticsBundle()}
+        recommendations={makeRecommendations()}
+        onRetry={vi.fn()}
+        onGenerateInterpretation={vi
+          .fn<() => Promise<{ status: "accepted" | "rejected" }>>()
+          .mockResolvedValue({ status: "accepted" })}
+        canOverride={true}
+        overrides={[
+          {
+            origin: "2019",
+            overridingMethod: "chain_ladder",
+            reason: "a priori better grounded",
+            overriddenBy: "user_senior",
+            overriddenAt: "2026-07-19T10:00:00.000Z",
+          },
+        ]}
+        onOverride={vi.fn()}
+      />,
+    );
+    fireEvent.focus(screen.getByRole("tab", { name: "Interpretation" }));
+    // The threaded props reach RecommendationTable: the live control + the card.
+    expect(
+      (screen.getByRole("button", {
+        name: "Change override",
+      }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+    expect(screen.getByText("overridden")).toBeDefined();
+    expect(screen.getByText(/a priori better grounded/)).toBeDefined();
+  });
+
+  it("Story 6.3: unwired (overrides omitted) degrades to no override capability", () => {
+    render(
+      <RunDetail
+        run={makeRun({
+          status: "complete",
+          hasResults: true,
+          hasDiagnostics: true,
+          hasRecommendations: true,
+          completedAt: "2026-07-19T00:00:02.000Z",
+        })}
+        diagnosticsBundle={makeDiagnosticsBundle()}
+        recommendations={makeRecommendations()}
+        onRetry={vi.fn()}
+        onGenerateInterpretation={vi
+          .fn<() => Promise<{ status: "accepted" | "rejected" }>>()
+          .mockResolvedValue({ status: "accepted" })}
+      />,
+    );
+    fireEvent.focus(screen.getByRole("tab", { name: "Interpretation" }));
+    // No overrides → the row is "accepted"; canOverride defaults false → the
+    // Override control is disabled (Analyst-style), no override card.
+    expect(screen.getByText("accepted")).toBeDefined();
+    expect(screen.queryByText("overridden")).toBeNull();
+    expect(
+      (screen.getByRole("button", {
+        name: "Override",
+      }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+  });
+
   it("no polling primitive: the component has no interval/timeout-based refetch (FR-20)", () => {
     // Structural: live status comes from the Convex subscription only — the
     // component takes `run` as a prop and never sets up its own refetch loop.
