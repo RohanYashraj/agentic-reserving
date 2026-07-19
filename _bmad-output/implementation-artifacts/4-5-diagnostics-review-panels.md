@@ -4,7 +4,7 @@ baseline_commit: 9342bbef6a716aea4559b83d01d33b412c8d7e1c
 
 # Story 4.5: Diagnostics Review Panels
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -326,3 +326,12 @@ Three first-run test failures, all in the newly-authored `tests/run-detail.test.
 | ---------- | ------- | --------------------------------------------------------------------------- |
 | 2026-07-19 | 0.1     | Story 4.5 drafted: Diagnostics tab renders the four panels (LDF stability small-multiples, Actual-vs-Expected latest-diagonal table, CL-vs-BF divergence bars [absent when null], residual heatmap blue↔amber with value-in-cell) from the stored DiagnosticsBundle verbatim with zero arithmetic (AD-1); new lean `getDiagnosticsBundle` guarded read query (getRun/getResultSet unchanged); per-element provenance-violet hoverable Diagnostic-ID anchors; accessible table toggles for the charts; Engine-Only Mode viewability by construction. Context rail + deep-linking held for Story 4.6. Status → ready-for-dev. |
 | 2026-07-19 | 1.0     | Story 4.5 implemented: `getDiagnosticsBundle` verbatim read query + the four-panel `DiagnosticsPanels` (LDF small-multiples, AvE table, CL-vs-BF bars, residual heatmap) rendered from the stored bundle with zero arithmetic; new `DiagnosticId` (violet ID anchors), `AccessibleChart` (data-table toggle), and `formatPercent`/`formatSignedFigure`/`formatResidual`; page wires the gated third subscription; CL-vs-BF absent-not-empty; Engine-Only viewability by construction. All gates green (npm test 276; tsc root+convex; lint; build; pytest 205/9 unchanged). Status → review. |
+
+### Review Findings (code review 2026-07-19)
+
+- [x] [Review][Decision-Resolved] AC3 compact-encoding Diagnostic IDs — ACCEPTED: `title`/`aria-label` is sufficient on the dense bars/heatmap cells (the ID stays selectable and appears in the context rail). Closed as met.
+- [x] [Review][Patch] Residual heatmap is unreadable in dark mode — `rampColor` returns hardcoded light hex backgrounds while the value text inherits the near-white foreground (WCAG contrast fail) [components/diagnostics/ResidualHeatmap.tsx rampColor]
+- [x] [Review][Patch] A NaN residual falls through `rampColor` and is painted as strong-negative blue [components/diagnostics/ResidualHeatmap.tsx]
+- [x] [Review][Patch] Empty heatmap cells are `<td aria-hidden="true">` — hiding a grid cell desynchronizes column/`<th scope>` association for screen readers [components/diagnostics/ResidualHeatmap.tsx]
+- [x] [Review][Patch] `AccessibleChart` exposes a chart/table view swap as `aria-expanded` (announces collapse/expand) instead of `aria-pressed`/distinct labelling [components/diagnostics/AccessibleChart.tsx]
+- [x] [Review][Defer] Heatmap `active`-cell state is seeded once and a `cellAt(r,c)!` non-null assertion assumes populated cells — stale if the same instance is reused for a different bundle without a `key` — deferred, immutable bundles make this rare

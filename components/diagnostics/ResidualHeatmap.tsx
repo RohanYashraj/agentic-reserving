@@ -27,12 +27,21 @@ type ResidualElement = DiagnosticsBundle["residuals"][number];
 // Diverging blue (negative) ↔ neutral ↔ amber (positive). Buckets are a display
 // annotation of the STORED residual — not a computed datum.
 function rampColor(r: number): { background: string; color?: string } {
+  // A non-finite residual is never colour-ramped (it would otherwise fall
+  // through to the strong-negative blue bucket and mis-signal); stay neutral and
+  // let the value text inherit the theme foreground.
+  if (!Number.isFinite(r)) return { background: "transparent" };
+  // Dark value text on the light cell tints so the printed residual stays
+  // legible in BOTH light and dark themes — the cell otherwise inherits the
+  // theme foreground (near-white in dark mode) on a near-white tint = invisible
+  // (WCAG 2.2 AA).
+  const ink = "#1F2937";
   if (r >= 1.0) return { background: "#FDBA5B", color: "#7A3E00" };
-  if (r >= 0.5) return { background: "#FDE8C8" };
-  if (r >= 0.15) return { background: "#FEF3E2" };
-  if (r > -0.15) return { background: "#F9FAFB" };
-  if (r > -0.35) return { background: "#EFF6FF" };
-  return { background: "#DBEAFE" };
+  if (r >= 0.5) return { background: "#FDE8C8", color: ink };
+  if (r >= 0.15) return { background: "#FEF3E2", color: ink };
+  if (r > -0.15) return { background: "#F9FAFB", color: ink };
+  if (r > -0.35) return { background: "#EFF6FF", color: ink };
+  return { background: "#DBEAFE", color: ink };
 }
 
 function devLabel(e: ResidualElement): string {
@@ -177,12 +186,16 @@ export function ResidualHeatmap({
                   {devs.map((d, c) => {
                     const el = cellAt(r, c);
                     if (!el) {
+                      // Empty cell: kept in the a11y tree (NOT aria-hidden) so
+                      // it still occupies its column and the <th scope> row/col
+                      // association stays intact; an sr-only label announces it.
                       return (
                         <td
                           key={d}
                           className="border border-border p-cell-pad"
-                          aria-hidden="true"
-                        />
+                        >
+                          <span className="sr-only">No residual</span>
+                        </td>
                       );
                     }
                     const { background, color } = rampColor(el.residual);

@@ -4,7 +4,7 @@ baseline_commit: ac465394df6a8bc49d9641c118783d5fdb37ef40
 
 # Story 4.1: Run Configuration with A Priori Grid
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -259,3 +259,10 @@ claude-opus-4-8[1m] (Claude Code, bmad-dev-story workflow)
 
 - 2026-07-19 — Story 4.1 created (ready-for-dev): run configuration with Method selection + a two-column BF a-priori grid (loss ratio + premium, resolving the engine's `loss_ratio × exposure` need vs the PRD/UX single-input description); `createRun` mutation creating a job-record-first `queued` run with atomic `run.created` audit via an invariant-preserving `appendAuditEntryInTransaction` extraction; fail-closed server-side BF gating mirroring the engine. Opens Epic 4. Orchestration/execution deferred to Story 4.2.
 - 2026-07-19 — Story 4.1 implemented (→ review): all 6 tasks complete. `runs` table + `createRun` mutation (job-record-first, atomic `run.created` audit via the extracted single-writer helper, fail-closed BF gating mirroring the engine); two-column pasteable a-priori grid (`RunConfig` + pure paste helpers); "Run methods" surface off the accepted Triangle detail page. Contract validators single-sourced from `engineContract.ts`. Gates green: npm test 215/19 files, tsc ×2 clean, lint clean, build (compiles `/triangles/[triangleId]/run`), pytest 205/9-skip.
+
+### Review Findings (code review 2026-07-19)
+
+- [x] [Review][Patch] Reject ambiguous comma-decimals in `parseNumberCell` — a comma used as a decimal separator ("0,72") currently strips to 72 and passes the Start gate; detect it and return null so the gate stays disabled (US thousands-grouping still parses) [components/runConfigPaste.ts:9] — DECISION: reject ambiguous comma-decimals
+- [x] [Review][Patch] `handlePaste` throws when `event.clipboardData` is null (some browsers / programmatic paste) [components/RunConfig.tsx handlePaste]
+- [x] [Review][Defer] Two-column paste ignores its target column and always maps col0→lossRatio / col1→premium — a transposed paste is silently accepted — deferred, UX hardening
+- [x] [Review][Defer] Zero-origin BF start (origins.every vacuously true) / `lossRatios[i]` undefined → TypeError if the triangle prop changes origins without remount — deferred, upstream validation rejects empty triangles

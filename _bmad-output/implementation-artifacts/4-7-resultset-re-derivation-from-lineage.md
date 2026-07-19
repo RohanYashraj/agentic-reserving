@@ -4,7 +4,7 @@ baseline_commit: d5c799c
 
 # Story 4.7: ResultSet Re-Derivation from Lineage
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -287,3 +287,18 @@ Two first-run adjustments during authoring (both mechanical, not logic bugs):
 | ---------- | ------- | --------------------------------------------------------------------------- |
 | 2026-07-19 | 0.1     | Story 4.7 drafted: full-stack ResultSet re-derivation from Lineage (FR-6, NFR-6, AD-11). Engine `rederivation.py` (pure compare + `ReDerivationReport`), `/rederive` endpoint, `rederiveRun` Convex action (requireMember, audit-logged, no run-row mutation), Run-detail trigger + outcome panel. Comparison arithmetic lives in `reserving_engine` (AD-1). Status → ready-for-dev. |
 | 2026-07-19 | 1.0     | Story 4.7 implemented: `reserving_engine.rederivation` (`rederive` + `ReDerivationReport`/`Discrepancy`, AD-11 exact/epsilon tiers single-sourced and imported back by the test); `engine_service` `POST /rederive`; `ReDerivationReport` joined the AD-10 drift chain (`schemas/rederivation-report.schema.json`, both links green); Convex `getRunForRederive`/`rederiveRun`/`recordRederivation` (requireMember-first action, chain-of-custody guard, lean `run.rederived` audit, immutable — no run-row patch); Run-detail "Re-derive" button + `RederivationPanel` (reproduced / discrepancy table / chain-of-custody warning, display-only). Two failure modes kept distinct (`triangleHashVerified`). All gates green (pytest 219/9; npm test 300; tsc root+convex; lint; build; codegen). Status → review. |
+
+### Review Findings (code review 2026-07-19)
+
+- [x] [Review][Patch] Wrap `run_methods` in `rederive` — convert a parameter-level construction error (BF with empty a-prioris, etc.) into a `reproduced=false` discrepancy report instead of letting it throw a 422, so a param-tamper surfaces like a figure-tamper [engine/reserving_engine/rederivation.py:230] — DECISION: report as discrepancy
+- [x] [Review][Patch] `rederiveRun` does not schema-validate the `/rederive` response — `reDerivationReportValidator` was added but never applied; a malformed response throws a raw TypeError with no `run.rederived` audit [convex/runs.ts rederiveRun]
+- [x] [Review][Patch] Non-deterministic discrepancy ordering — `r_methods.keys() - s_methods.keys()` iterates a set (hash-seed dependent) in an otherwise-deterministic audit artifact; wrap in `sorted(...)` [engine/reserving_engine/rederivation.py:243]
+- [x] [Review][Defer] `None`→`0.0` conflation in `Discrepancy` — an absent figure is reported as "0" with a full delta, indistinguishable from a genuine 0.0 — deferred, documented tradeoff, tamper still caught
+- [x] [Review][Defer] `delta = stored − rederived` can overflow to ±inf on adversarial ~1e308 figures → `_require_finite` ValidationError → 500 — deferred, hostile input, fails closed
+- [x] [Review][Defer] Duplicate method/origin/(from_dev,to_dev) keys dict-collapse in the comparison — weakens tamper detection on hostile input — deferred, hardening
+- [x] [Review][Defer] Stored ResultSet `schemaVersion` is not checked before the field-wise compare — a cross-schema ResultSet could falsely "reproduce" — deferred, all schemas are 1.0.0 today
+- [x] [Review][Defer] Epsilon compare adds `abs_tol=1e-8`, diverging from the documented "1e-8 relative" contract — deferred, doc reconciliation
+- [x] [Review][Defer] JSON-schema vs Convex-validator optionality asymmetry on `schemaVersion`/`discrepancies` — deferred, latent, engine always emits both
+- [x] [Review][Defer] `ON_PINNED_PLATFORM` reads the environment at import inside the pure core (AD-2 tension) — deferred, honestly recorded in `tier`
+- [x] [Review][Defer] Whitespace-only `run_id` is accepted [engine/engine_service/models.py] — deferred, trusted internal caller
+- [x] [Review][Defer] No test coverage for multi-discrepancy ordering or the added-method (`methodPresence`) branch — deferred, test coverage

@@ -40,12 +40,12 @@ const residualFormat = new Intl.NumberFormat("en-US", {
  * (e.g. a Mack field on a CL result), or "" for a triangle hole (pass "").
  */
 export function formatFigure(value: number | null, nullText = "—"): string {
-  return value === null ? nullText : groupFormat.format(value);
+  return value === null || !Number.isFinite(value) ? nullText : groupFormat.format(value);
 }
 
 /** An age-to-age development factor (LDF), 2–4 fraction digits. */
 export function formatFactor(value: number | null, nullText = "—"): string {
-  return value === null ? nullText : factorFormat.format(value);
+  return value === null || !Number.isFinite(value) ? nullText : factorFormat.format(value);
 }
 
 /**
@@ -54,7 +54,7 @@ export function formatFactor(value: number | null, nullText = "—"): string {
  * `Intl` scales it to a percent (AD-1: never `ratio − 1` arithmetic here).
  */
 export function formatPercent(value: number | null, nullText = "—"): string {
-  return value === null ? nullText : percentFormat.format(value);
+  return value === null || !Number.isFinite(value) ? nullText : percentFormat.format(value);
 }
 
 /**
@@ -65,10 +65,10 @@ export function formatSignedFigure(
   value: number | null,
   nullText = "—",
 ): string {
-  return value === null ? nullText : signedGroupFormat.format(value);
+  return value === null || !Number.isFinite(value) ? nullText : signedGroupFormat.format(value);
 }
 
 /** A standardized residual (fixed 2 d.p.) for the residual heatmap cells. */
 export function formatResidual(value: number | null, nullText = "—"): string {
-  return value === null ? nullText : residualFormat.format(value);
+  return value === null || !Number.isFinite(value) ? nullText : residualFormat.format(value);
 }

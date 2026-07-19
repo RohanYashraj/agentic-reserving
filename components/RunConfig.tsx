@@ -111,7 +111,7 @@ export function RunConfig({
     rowIndex: number,
     event: ClipboardEvent<HTMLInputElement>,
   ) {
-    const text = event.clipboardData.getData("text");
+    const text = event.clipboardData?.getData("text") ?? "";
     if (text === "") {
       return;
     }

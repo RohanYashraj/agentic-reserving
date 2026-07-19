@@ -4,7 +4,7 @@ baseline_commit: 80e1dc6c3b19a76edd339a11791ac983a8b5de29
 
 # Story 4.6: Diagnostic Context Rail and Deep Linking
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -276,3 +276,11 @@ Also fixed a duplicate-DOM-`id` bug caught during authoring: the rail initially 
 | ---------- | ------- | --------------------------------------------------------------------------- |
 | 2026-07-19 | 0.1     | Story 4.6 drafted: Diagnostic context rail + `#<diagnosticId>` deep-linking layered onto Story 4.5's panels. Selection context makes every diagnostic element selectable (click / Enter-Space; heatmap roving arrow-nav + Esc-to-grid); the rail resolves the selected id against the same `DiagnosticsBundle` and renders per-kind stored values verbatim (AD-1), an id chip, an honest-empty "Cited by" shell (Epic 5), and the deep-link string; `md` bottom-sheet, `lg` right column (hand-rolled CSS, no new dep); `RunDetail` reads `window.location.hash` → Diagnostics tab + `initialSelectedId` → select-scroll-highlight (the product-wide citation nav target, FR-8). No new Convex query/schema/engine edit (AC8). Status → ready-for-dev. |
 | 2026-07-19 | 1.0     | Story 4.6 implemented: `DiagnosticSelectionProvider` context + `DiagnosticContextRail`; `DiagnosticId` upgraded to a selection-control `<button>` (owns the `id` scroll target); divergence bars + heat cells selectable; residual heatmap is a roving-`tabIndex` 2-D grid (arrow nav + Enter/Space/Esc); `DiagnosticsPanels` now `"use client"` with the provider, the responsive rail (lg right column / md bottom sheet, no new dep), and the `initialSelectedId` deep-link driver (select + `getElementById` scroll + transient outline); `RunDetail` maps `window.location.hash` → Diagnostics tab + `initialSelectedId`. Rail values are stored fields verbatim (AD-1, no arithmetic); "Cited by" is an honest-empty shell. No Convex/schema/engine edits (AC8). All gates green (npm test 287; tsc root+convex; lint; build; pytest 205/9 unchanged). Status → review. |
+
+### Review Findings (code review 2026-07-19)
+
+- [x] [Review][Patch] HIGH — Deep-linked Diagnostics selection trap: `select`/`clear` get fresh identities on every `selectedId` change (selection.tsx memo keyed on `[selectedId]`), so the deep-link effect (dep `select`) re-fires on every subsequent click and snaps selection back to the hash target; "Clear" is defeated the same way. Fix: `useCallback` select/clear, or a once-applied ref guard [components/diagnostics/selection.tsx:31-38, components/DiagnosticsPanels.tsx:51-73]
+- [x] [Review][Patch] `RunDetail` sets `initialSelectedId` on hashchange but never clears it back to null on an empty hash, latching the old selection [components/RunDetail.tsx]
+- [x] [Review][Defer] `buildIndex` + origin/dev axis arrays rebuilt on every render (no `useMemo`) — deferred, harmless perf on immutable bundles
+- [x] [Review][Defer] A deep-link hash on a queued/running run forces the empty Diagnostics tab — deferred, unknown ids already no-op
+- [x] [Review][Defer] Glossary "Run" is lowercased in some user-facing copy ("Start run", "Run methods") — deferred, cosmetic vocabulary drift

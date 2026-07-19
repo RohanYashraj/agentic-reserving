@@ -26,7 +26,7 @@ export function AccessibleChart({
         <button
           type="button"
           onClick={() => setShowTable((v) => !v)}
-          aria-expanded={showTable}
+          aria-pressed={showTable}
           aria-controls={regionId}
           className="text-xs text-muted-foreground hover:text-foreground"
         >

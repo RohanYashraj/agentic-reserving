@@ -1,6 +1,13 @@
 "use client";
 
-import { createContext, useContext, useMemo, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 
 // Story 4.6 (AC1/2/5): the single source of truth for "which Diagnostic is
 // selected". A dependency-free React context so the four heterogeneous panels
@@ -28,13 +35,16 @@ export function DiagnosticSelectionProvider({
   children: ReactNode;
 }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Stable identities (setState is stable) so a consumer that lists `select`/
+  // `clear` in an effect's deps — the deep-link driver in DiagnosticsPanels —
+  // does NOT re-fire on every selection change. Without this the effect would
+  // re-select the hash target on each click, trapping selection on the
+  // deep-linked element and defeating Clear.
+  const select = useCallback((id: string) => setSelectedId(id), []);
+  const clear = useCallback(() => setSelectedId(null), []);
   const value = useMemo<DiagnosticSelection>(
-    () => ({
-      selectedId,
-      select: (id: string) => setSelectedId(id),
-      clear: () => setSelectedId(null),
-    }),
-    [selectedId],
+    () => ({ selectedId, select, clear }),
+    [selectedId, select, clear],
   );
   return (
     <DiagnosticSelectionContext.Provider value={value}>

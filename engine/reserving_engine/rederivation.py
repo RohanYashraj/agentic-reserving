@@ -36,7 +36,12 @@ from typing import Literal
 
 from pydantic import BaseModel, field_validator
 
-from reserving_engine.methods import run_methods
+from reserving_engine.methods import (
+    InvalidAprioriError,
+    InvalidTriangleError,
+    MissingAprioriError,
+    run_methods,
+)
 from reserving_engine.resultset import (
     MethodResult,
     ResultSet,
@@ -226,8 +231,21 @@ def rederive(
             discrepancies=(),
         )
 
-    # (2) Re-execute the engine from the stored Lineage's parameters.
-    rederived = run_methods(triangle, stored_result_set.lineage.parameters)
+    # (2) Re-execute the engine from the stored Lineage's parameters. A Lineage
+    # whose parameters are internally inconsistent (e.g. BF requested with no
+    # a-prioris) is itself a tamper — report it as a discrepancy, NEVER throw:
+    # the auditor must see reproduced=False, not an API error. The Triangle is
+    # authentic (hash verified above), so triangle_hash_verified stays True.
+    try:
+        rederived = run_methods(triangle, stored_result_set.lineage.parameters)
+    except (InvalidAprioriError, MissingAprioriError, InvalidTriangleError) as exc:
+        return ReDerivationReport(
+            run_id=run_id,
+            reproduced=False,
+            triangle_hash_verified=True,
+            tier=tier,
+            discrepancies=(_disc("", "parameters", type(exc).__name__, 1.0, 0.0),),
+        )
 
     # (3) Compare field-wise. Methods keyed by name so a tampered/reordered
     # method set surfaces structurally rather than misaligning the diff.
@@ -240,7 +258,7 @@ def rederive(
             discs.append(_disc(method_name, "methodPresence", "", 1.0, 0.0))
             continue
         discs.extend(_compare_method(stored_method, rederived_method))
-    for method_name in r_methods.keys() - s_methods.keys():
+    for method_name in sorted(r_methods.keys() - s_methods.keys()):
         discs.append(_disc(method_name, "methodPresence", "", 0.0, 1.0))
 
     return ReDerivationReport(

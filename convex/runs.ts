@@ -22,6 +22,7 @@ import type {
 } from "./lib/engineContract";
 import {
   diagnosticsBundleValidator,
+  reDerivationReportValidator,
   resultSetValidator,
   runParametersValidator,
 } from "./lib/engineContract";
@@ -337,7 +338,10 @@ export const storeResultSet = internalMutation({
       payload: {
         runId,
         methodCount: resultSet.methodResults.length,
-        originCount: run.parameters.aprioriLossRatios.length,
+        // The true Origin-Period count (shared across methods), NOT the a-priori
+        // count — `aprioriLossRatios` is [] for a CL-only run. Mirrors the
+        // `run.created` payload's originCount.
+        originCount: resultSet.methodResults[0]?.originResults.length ?? 0,
       },
     });
   },
@@ -421,8 +425,14 @@ export const onRunComplete = internalMutation({
     result: vResultValidator,
     context: v.any(),
   },
-  handler: async (ctx, { result, context }) => {
+  handler: async (ctx, { workflowId, result, context }) => {
     const { runId, actor } = context as { runId: Id<"runs">; actor: string };
+    // Workflow-generation fence: retryRun re-queues the SAME runId under a NEW
+    // workflowId, so a late/duplicate completion callback from a superseded
+    // workflow must NOT mark the freshly re-queued run failed. Act only when
+    // this callback belongs to the run's current workflow.
+    const current = await ctx.db.get(runId);
+    if (current === null || current.workflowId !== workflowId) return;
     if (result.kind === "failed") {
       await markRunFailedInTransaction(ctx, {
         runId,
@@ -708,6 +718,7 @@ export const recordRederivation = internalMutation({
  */
 export const rederiveRun = action({
   args: { workspaceId: v.string(), runId: v.id("runs") },
+  returns: reDerivationReportValidator,
   handler: async (ctx, { workspaceId, runId }): Promise<ReDerivationReport> => {
     // AD-4: identity + Workspace membership before anything else (before fetch).
     const { identity } = await requireMember(ctx, workspaceId);
@@ -738,6 +749,26 @@ export const rederiveRun = action({
       triangle,
       storedResultSet,
     });
+
+    // callEngine casts the JSON unchecked — validate the wire shape against the
+    // ReDerivationReport contract BEFORE reading it, so a malformed/partial
+    // response surfaces as a coded error (not a raw TypeError on
+    // `report.discrepancies.length`) and is never audited as a verdict. The
+    // action's `returns` validator re-checks the value at the boundary too.
+    if (
+      report === null ||
+      typeof report !== "object" ||
+      typeof report.reproduced !== "boolean" ||
+      typeof report.triangleHashVerified !== "boolean" ||
+      (report.tier !== "exact" && report.tier !== "epsilon") ||
+      !Array.isArray(report.discrepancies)
+    ) {
+      throw new ConvexError({
+        code: "ENGINE_INVALID_RESPONSE",
+        message:
+          "The /rederive response did not match the ReDerivationReport contract.",
+      });
+    }
 
     // Audit the outcome (AC4) — only reached on a successful engine report; a
     // down engine throws above (ENGINE_UNAVAILABLE) and is NOT recorded as a

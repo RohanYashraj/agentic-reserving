@@ -4,7 +4,7 @@ baseline_commit: ac465394df6a8bc49d9641c118783d5fdb37ef40
 
 # Story 4.2: Durable Run Orchestration and ResultSet Persistence
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -332,3 +332,17 @@ claude-opus-4-8[1m] (Claude Code, bmad-dev-story workflow)
 
 - 2026-07-19 — Story 4.2 created (ready-for-dev): durable Run orchestration via the `@convex-dev/workflow` component (first use in this repo — installs `convex.config.ts` + `WorkflowManager`), calling `engine_service` `POST /runs` with the Convex run id as idempotency key, schema-validating the ResultSet/DiagnosticsBundle against the AD-10 contract validators before storage (validator-typed store-mutation args; schema-invalid or hash-mismatched output is never stored → run failed), owning every `queued → running → complete | failed` transition with bounded idempotent retries and atomic audit-logged lifecycle (`run.started`/`run.completed`/`run.failed`). Consumes 4.1's job record; run detail/live-status UI deferred to 4.3.
 - 2026-07-19 — Story 4.2 implemented (→ review): all 7 tasks complete. Wired `@convex-dev/workflow` (`convex.config.ts` + `convex/workflow.ts`, codegen → `components.workflow`); `runs` table gained optional orchestration fields; `createRun` kicks off `runWorkflow` after its atomic job record; orchestration steps (`markRunning`/`executeEngineRun`/`storeResultSet`/`markRunFailed`/`onRunComplete`) own status transitions, schema-gate persistence (validator-typed args + triangleHash chain-of-custody), and atomic audit lifecycle. convex-test registers the component via `@convex-dev/workflow/test`; 15 deterministic direct step-function tests cover every AC (the full end-to-end workflow drive runs in isolation but is excluded from the parallel suite — see deferred-work). Gates green: npm test 230/19 files, tsc ×2 clean, lint clean, build (compiles the run route), pytest 205/9-skip (engine unchanged).
+
+### Review Findings (code review 2026-07-19)
+
+- [x] [Review][Defer] Every orchestration failure collapses to `error.code = "RUN_FAILED"` — structured engine codes lost at the workflow boundary (message preserved) — DECISION: deferred, preserving codes through the workpool boundary is a non-trivial enhancement [convex/runs.ts:424-431]
+- [x] [Review][Patch] `onRunComplete` has no workflow-generation fencing — a stale/duplicate completion callback for a superseded workflow can mark a freshly re-queued run `failed`; compare the callback's `workflowId` arg to `run.workflowId` before marking [convex/runs.ts:418-441]
+- [x] [Review][Patch] `run.completed` audit records `originCount: run.parameters.aprioriLossRatios.length` — an a-priori count, not the Origin-Period count (0 for a CL-only run) [convex/runs.ts storeResultSet]
+- [x] [Review][Defer] Non-transient engine errors (deterministic 4xx) are retried the full 4× before failing — deferred, wasted latency only
+- [x] [Review][Defer] `createRun` has no server-side idempotency guard; a double-submit creates two runs/workflows (client button-disable mitigates) — deferred, hardening
+- [x] [Review][Defer] No request timeout (AbortController) on engine calls; a hung engine blocks until the platform action-timeout — deferred, pre-existing in engineClient.ts
+- [x] [Review][Defer] `storeResultSet` verifies `triangleHash` but not the response `runId` / `diagnosticsBundle.runId` — deferred, engine is authoritative and called with runId
+- [x] [Review][Defer] `appendAuditEntryInTransaction` is exported with free workspaceId/actor params — the single-writer boundary is now convention, not type-enforced — deferred, current callers safe
+- [x] [Review][Defer] `getRunForEngine` lacks the tenancy re-check its sibling `getRunForRederive` has — deferred, internal-only
+- [x] [Review][Defer] `onRunComplete` has no default branch for an unmodeled workflow result kind — deferred, vResultValidator constrains kinds
+- [x] [Review][Defer] Transient-retry → exactly-once-store path has no committed regression test — deferred, test coverage

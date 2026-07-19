@@ -120,3 +120,42 @@
 - **CSV import of BF a-prioris (PRD OQ-5).** v1 captures loss ratio + premium per Origin Period via typed inputs with pasteable spreadsheet columns (single- and two-column blocks). Bulk/many-segment CSV import of a-prioris is deferred until a design partner needs it. [components/RunConfig.tsx]
 - **`run.created` audit payload is lean** (`{ runId, triangleId, methods, originCount, aprioriCount }`) — the full parameters (incl. per-origin loss ratios and premiums) live on the `runs` row, not the audit entry. If the Epic 7 Audit Log browser needs to render the exact a-prioris from the audit trail alone, widen the payload then (and revisit the `appendAuditEntry` event-type/payload vocabulary already flagged from Epic 1). [convex/runs.ts]
 - **A queued run is currently inert.** Story 4.1 creates the `queued` job record but nothing consumes it — orchestration (`@convex-dev/workflow`, the engine `/runs` call, and the `queued → running → complete|failed` transitions) lands in Story 4.2. Expected by design; noted so a reviewer doesn't read the queued-but-never-run state as a bug. [convex/runs.ts, convex/schema.ts runs table]
+
+## Deferred from: code review of epic 4 (2026-07-19)
+
+### Story 4.1
+- Two-column paste ignores its target column (assumes [lossRatio, premium]); a transposed paste is silently accepted.
+- Zero-origin BF start / `lossRatios[i]` undefined TypeError if triangle origins change without remount.
+
+### Story 4.2
+- Orchestration failures collapse to code RUN_FAILED (structured engine codes lost at the workflow boundary; message preserved).
+- Non-transient engine errors retried the full 4× before failing (wasted latency).
+- `createRun` has no server-side idempotency guard (client button-disable mitigates double-submit).
+- No request timeout (AbortController) on engine calls (pre-existing in engineClient.ts).
+- `storeResultSet` verifies triangleHash but not the response runId / diagnosticsBundle.runId.
+- `appendAuditEntryInTransaction` exported — single-writer boundary is convention, not type-enforced.
+- `getRunForEngine` lacks the tenancy re-check its sibling `getRunForRederive` has.
+- `onRunComplete` has no default branch for an unmodeled workflow result kind.
+- Transient-retry → exactly-once-store path has no committed regression test.
+
+### Story 4.3
+- `StepRail` renders a diagnostics-complete step as an inert `<span>` if `onSelectDiagnostics` is not passed.
+
+### Story 4.5
+- Heatmap `active`-cell state seeded once + `cellAt(r,c)!` assertion — stale if the instance is reused for another bundle without a `key`.
+
+### Story 4.6
+- `buildIndex` + axis arrays rebuilt every render (no `useMemo`).
+- A deep-link hash on a queued/running run forces the empty Diagnostics tab.
+- Glossary "Run" lowercased in some UI copy.
+
+### Story 4.7
+- `None`→`0.0` conflation in `Discrepancy` (absent figure shown as "0").
+- `delta` can overflow to ±inf on adversarial ~1e308 figures → 500.
+- Duplicate method/origin/factor keys dict-collapse — weakens tamper detection.
+- Stored ResultSet `schemaVersion` not checked before field-wise compare.
+- `abs_tol=1e-8` diverges from documented "1e-8 relative" tolerance.
+- JSON-schema vs Convex-validator optionality asymmetry (schemaVersion/discrepancies).
+- `ON_PINNED_PLATFORM` reads env at import inside the pure core (AD-2 tension).
+- Whitespace-only `run_id` accepted (engine_service/models.py).
+- No multi-discrepancy / added-method ordering test coverage.

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 // A truncated, click-to-copy hash (Story 4.4, extracted from the Triangle
 // detail page's HashRow). Used by the Triangle detail page and the provenance
@@ -10,13 +10,22 @@ import { useState } from "react";
 
 export function CopyableHash({ label, hash }: { label?: string; hash: string }) {
   const [copied, setCopied] = useState(false);
+  const timerRef = useRef<number | null>(null);
+  // Cancel a pending "Copied" reset on unmount so it never setState a gone node.
+  useEffect(
+    () => () => {
+      if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+    },
+    [],
+  );
   async function copy() {
     // clipboard is unavailable in insecure contexts and can reject on
     // permission-deny — never let the promise reject unhandled.
     try {
       await navigator.clipboard.writeText(hash);
       setCopied(true);
-      window.setTimeout(() => setCopied(false), 1500);
+      if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+      timerRef.current = window.setTimeout(() => setCopied(false), 1500);
     } catch {
       /* no-op: copy unsupported/denied; the hash is still visible to select */
     }

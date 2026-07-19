@@ -105,6 +105,10 @@ export function RunDetail({
       if (id) {
         setInitialSelectedId(id);
         setTab("diagnostics");
+      } else {
+        // Empty hash → clear the latched selection so it can't re-drive an old
+        // deep-link target on a later navigation.
+        setInitialSelectedId(null);
       }
     }
     applyHash();

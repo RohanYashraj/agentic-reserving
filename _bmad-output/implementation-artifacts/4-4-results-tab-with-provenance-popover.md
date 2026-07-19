@@ -4,7 +4,7 @@ baseline_commit: 0c07aa4cad2c85d5c751e326e4ca86754adadb1d
 
 # Story 4.4: Results Tab with Provenance Popover
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -308,3 +308,8 @@ Two first-run failures, both in the newly-authored specs (not implementation bug
 | ---------- | ------- | --------------------------------------------------------------------------- |
 | 2026-07-19 | 0.1     | Story 4.4 drafted: Results tab renders the stored ResultSet verbatim (ultimates/IBNR/LDFs per Method per Origin Period + Mack SE/ranges) in `numeric` texture with zero arithmetic (AD-1); new lean `getResultSet` read query (getRun unchanged); per-figure provenance popover (engine/chainladder version, copyable truncated Triangle hash, parameters, audit-trail forward-reference) via a new radix Popover primitive; shared `formatFigure` + `CopyableHash` extractions. Status → ready-for-dev. |
 | 2026-07-19 | 1.0     | Story 4.4 implemented: `getResultSet` verbatim read query + `ResultsGrid` (per-Method ultimates/IBNR/LDFs + Mack SE/range, no arithmetic) + `ProvenancePopover` (five Lineage items, click/right-click/keyboard, `Esc`) over new `components/ui/popover.tsx`; extracted `lib/formatNumber.ts` + `components/CopyableHash.tsx`; page wires the gated second subscription. All gates green (npm test 262; tsc root+convex; lint; build; pytest 205/9 unchanged). Status → review. |
+
+### Review Findings (code review 2026-07-19)
+
+- [x] [Review][Patch] Figures render literal "NaN"/"∞" — `formatFigure`/`formatFactor`/`formatPercent`/`formatSignedFigure`/`formatResidual` special-case only `null`, not non-finite values [lib/formatNumber.ts:42-74]
+- [x] [Review][Patch] `CopyableHash` schedules a 1.5s `setTimeout(setCopied)` with no cleanup — setState after unmount if the row/popover closes within 1.5s [components/CopyableHash.tsx]

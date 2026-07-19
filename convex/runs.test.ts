@@ -563,6 +563,9 @@ async function seedRun(
       triangleHash: TRIANGLE_HASH,
       status,
       parameters,
+      // A started run always carries the id of its current workflow; onRunComplete
+      // fences on it (a callback whose workflowId != run.workflowId is ignored).
+      workflowId: TEST_WORKFLOW_ID as unknown as string,
       createdBy: "user_a",
       createdAt: "2026-07-19T00:00:00.000Z",
     }),
@@ -848,6 +851,31 @@ describe("orchestration — markRunFailed + onRunComplete (AC2, AC3, AC4)", () =
 
     expect((await getRun(t, runId))?.error?.code).toBe("RUN_CANCELED");
     expect((await getRun(t, runId))?.status).toBe("failed");
+  });
+
+  test("onRunComplete fences a stale workflow: mismatched workflowId is a no-op", async () => {
+    const t = initConvexTest();
+    const triangleId = await seedValidatedTriangle(t);
+    // Simulate a retry: the run was re-queued under a NEW workflow, so its
+    // workflowId no longer matches the superseded callback's TEST_WORKFLOW_ID.
+    const runId = await seedRun(t, triangleId, "running");
+    await t.run((ctx) =>
+      ctx.db.patch(runId, { workflowId: "wf_new" as unknown as string }),
+    );
+
+    await t.mutation(internal.runs.onRunComplete, {
+      workflowId: TEST_WORKFLOW_ID,
+      result: { kind: "failed", error: "stale engine failure" },
+      context: { runId, actor: "user_a" },
+    });
+
+    // The freshly re-queued run is untouched — not clobbered to failed.
+    const run = await getRun(t, runId);
+    expect(run?.status).toBe("running");
+    expect(run?.error ?? null).toBeNull();
+    expect(
+      (await auditRows(t)).filter((a) => a.eventType === "run.failed"),
+    ).toHaveLength(0);
   });
 
   test("onRunComplete success → no-op on an already-complete run", async () => {

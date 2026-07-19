@@ -4,7 +4,7 @@ baseline_commit: 2eba35e4c45aec0119deea2438d0c039b2ee8a71
 
 # Story 4.3: Run Detail with Step Rail and Live Status
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -286,3 +286,7 @@ Three first-run failures were all in the newly-authored specs (not implementatio
 | Date       | Version | Description                                                                 |
 | ---------- | ------- | --------------------------------------------------------------------------- |
 | 2026-07-19 | 0.1     | Story 4.3 implemented: `getRun` reactive read surface + idempotent `retryRun`; Run-detail page with golden-path step rail, four tabs (locked/empty), `aria-live` per-Method rows (no polling), failed banner + Retry; `RunConfig` navigation handoff; `queued` StatusBadge; shared method labels. All gates green. Status → review. |
+
+### Review Findings (code review 2026-07-19)
+
+- [x] [Review][Defer] `StepRail` renders a diagnostics-complete step as an inert `<span>` if `onSelectDiagnostics` is not passed — deferred, requires a missing prop
