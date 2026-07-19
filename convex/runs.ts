@@ -35,6 +35,7 @@ import {
 import {
   citationsFromText,
   markersAreWellFormed,
+  uncitedSentences,
 } from "./lib/citationMarker";
 import { requireMember, requireRole } from "./lib/guards";
 import { workflow } from "./workflow";
@@ -1712,6 +1713,15 @@ export const editReserveReport = mutation({
 
     const contentVersion = existing.contentVersion + 1;
     const now = new Date(Date.now()).toISOString();
+    // Story 6.4 (D9): capture the machine-drafted ORIGINAL into `draftBaseline`
+    // ONCE, on the first human edit — the transition where `machineDrafted` flips
+    // true → false. This is the baseline the 6.4 diff-since-draft link compares
+    // against (what the interpretation layer produced). A manual report
+    // (machineDrafted:false from creation) captures no baseline; a re-opened
+    // draft (started from a published version) is also machineDrafted:false, so
+    // it captures none either — its diff baseline is the published content.
+    const captureBaseline =
+      existing.machineDrafted === true && existing.draftBaseline === undefined;
     // The typed `report` patch re-validates the reassembled document (AD-10).
     await ctx.db.patch(existing._id, {
       report,
@@ -1719,6 +1729,7 @@ export const editReserveReport = mutation({
       contentVersion,
       updatedBy: actor,
       updatedAt: now,
+      ...(captureBaseline ? { draftBaseline: existing.report } : {}),
     });
 
     await appendAuditEntryInTransaction(ctx, {
@@ -1928,6 +1939,219 @@ export const listReportsAwaitingReview = query({
         assignee: r.assignee,
       }))
       .sort((a, b) => (b.submittedAt ?? "").localeCompare(a.submittedAt ?? ""));
+  },
+});
+
+/** The four canonical Reserve Report section keys (FR-11), for the 6.4 blocker. */
+const REPORT_SECTION_KEYS = [
+  "executiveSummary",
+  "methodSelectionRationale",
+  "movementCommentary",
+  "limitations",
+] as const;
+
+/**
+ * Approve & publish a Reserve Report awaiting review (Story 6.4, AC-1, AC-2,
+ * FR-13, AD-4/AD-5/AD-6). The Senior-Actuary sign-off — the SECOND production
+ * caller of `requireRole(ctx, workspaceId, "senior_actuary")` (after 6.3's
+ * `overrideRecommendation`), and the report-lifecycle sibling of 6.2's
+ * `submitReportForReview`. `requireRole` is the FIRST statement (D1): an
+ * Analyst's publish is rejected SERVER-SIDE with `FORBIDDEN` (never UI-hiding
+ * alone — AD-4; the client `canApprove` is display courtesy only).
+ *
+ * "Race-free" is Convex transactional serializability + a `status ===
+ * "awaiting_review"` precondition, NOT client coordination (D1) — the exact 6.2
+ * shape. Two concurrent approvals: one patches awaiting_review → published; the
+ * second re-reads `published` inside its transaction and throws
+ * `REPORT_NOT_APPROVABLE`. A double-click is idempotent.
+ *
+ * The BLOCKER (D2/AC-2): every claim must still cite a Diagnostic. `uncitedSentences`
+ * over the four section texts — if ANY section has a figure-bearing sentence
+ * with no `[[cite:...]]` marker, it throws `REPORT_HAS_UNCITED_CLAIMS` and does
+ * NOT publish. This is the human-owned analog of the gate's claim-citation rule,
+ * applied at sign-off (AD-5: the gate is NOT re-run on human edits; the approver
+ * signs the exact content version). No DiagnosticsBundle needed — a pure
+ * marker/figure check. The client disables Approve with the SAME helper
+ * (reportCitationResolution, D6), so button state and server gate never disagree.
+ *
+ * On success: an APPEND-ONLY `publishedReportVersions` snapshot preserves the
+ * signed content forever (D3, never patched/deleted); the working row flips to
+ * `published` and records `approvedBy`/`approvedAt` (D4) — it is then edit-locked
+ * by the EXISTING `editReserveReport`/`submitReportForReview` status guards (no
+ * new guard). ONE lean audit `report.published` (approver = actor, timestamp =
+ * the entry's own hash-chained timestamp, signed version = contentVersion —
+ * AC-2). No optimistic UI: returns null; the client re-reads via the
+ * `getReserveReport` subscription on server ack (D8/D9). No arithmetic (AD-1) —
+ * `overrideCount` is a Set size over categorical Origin labels.
+ */
+export const approveAndPublish = mutation({
+  args: { workspaceId: v.string(), runId: v.id("runs") },
+  returns: v.null(),
+  handler: async (ctx, { workspaceId, runId }) => {
+    // AD-4/D1: the role gate FIRST (calls requireMember internally). An Analyst
+    // is rejected here with FORBIDDEN — the server is the authority, not the UI.
+    const { identity } = await requireRole(ctx, workspaceId, "senior_actuary");
+    const approvedBy = identity.subject;
+
+    const row = await ctx.db
+      .query("reserveReports")
+      .withIndex("by_run", (q) => q.eq("runId", runId))
+      .unique();
+    // No existence leak: a vanished / cross-tenant row throws REPORT_NOT_FOUND
+    // (mirrors submitReportForReview's tenancy posture).
+    if (row === null || row.workspaceId !== workspaceId) {
+      throw new ConvexError({
+        code: "REPORT_NOT_FOUND",
+        message: "That Reserve Report does not exist in this Workspace.",
+      });
+    }
+    // The race/state guard (D1): only an awaiting_review report is approvable. A
+    // draft not yet submitted, or an already-published row, is rejected.
+    if (row.status !== "awaiting_review") {
+      throw new ConvexError({
+        code: "REPORT_NOT_APPROVABLE",
+        message:
+          "This Reserve Report is not awaiting review and cannot be approved.",
+      });
+    }
+
+    // The blocker (D2/AC-2): every figure-bearing sentence must carry a citation.
+    const sectionsWithUncited = REPORT_SECTION_KEYS.filter(
+      (key) => uncitedSentences(row.report[key].text).length > 0,
+    );
+    if (sectionsWithUncited.length > 0) {
+      throw new ConvexError({
+        code: "REPORT_HAS_UNCITED_CLAIMS",
+        message:
+          "This Reserve Report has claims without a resolvable citation and cannot be published.",
+        details: { sections: sectionsWithUncited },
+      });
+    }
+
+    // Distinct overridden Origin Periods at approval time (D4/6.3). A Set size
+    // over categorical origin labels — NOT reserve-figure arithmetic (AD-1).
+    const overrides = await ctx.db
+      .query("recommendationOverrides")
+      .withIndex("by_run", (q) => q.eq("runId", runId))
+      .collect();
+    const overrideCount = new Set(overrides.map((o) => o.origin)).size;
+
+    const now = new Date(Date.now()).toISOString();
+
+    // The immutable snapshot (D3; append-only, never patched/deleted) — the
+    // durable, signed published content the approver's signature covers.
+    await ctx.db.insert("publishedReportVersions", {
+      workspaceId,
+      runId,
+      reportId: row._id,
+      contentVersion: row.contentVersion,
+      report: row.report,
+      approvedBy,
+      approvedAt: now,
+      overrideCount,
+    });
+
+    // Flip the working row to published + record the on-row approval (D4) so the
+    // published composition renders the inline record without a snapshot read.
+    await ctx.db.patch(row._id, {
+      status: "published",
+      approvedBy,
+      approvedAt: now,
+      updatedBy: approvedBy,
+      updatedAt: now,
+    });
+
+    // The sole audit writer (AD-6). Lean payload: approver = actor, timestamp =
+    // the entry's own hash-chained timestamp, signed version = contentVersion.
+    await appendAuditEntryInTransaction(ctx, {
+      workspaceId,
+      actor: approvedBy,
+      eventType: "report.published",
+      runId,
+      payload: { runId, contentVersion: row.contentVersion, overrideCount },
+    });
+
+    return null;
+  },
+});
+
+/**
+ * Start a new version of a published Reserve Report (Story 6.4, AC-2, FR-13,
+ * D5). A MEMBER action — `requireMember` FIRST (AD-4): re-opening a published
+ * report for revision is member-level (an Analyst starts the revision;
+ * re-publishing STILL requires `requireRole` approval — no privilege escalation,
+ * matching `editReserveReport`). This is the ONLY escape from published
+ * immutability (AC-2).
+ *
+ * Precondition `status === "published"` → else `REPORT_NOT_PUBLISHED`. It
+ * re-opens the SAME working row to `draft` (contentVersion +1), links
+ * `supersedes` → the latest `publishedReportVersions` snapshot for the Run, and
+ * clears `approvedBy`/`approvedAt`. The content is UNCHANGED — now editable
+ * again; the prior published snapshot stays immutable in the append-only table
+ * (D3). Audited `report.newVersionStarted`. No optimistic UI: returns null; the
+ * client re-reads via the `getReserveReport` subscription on server ack (D9).
+ */
+export const startNewReportVersion = mutation({
+  args: { workspaceId: v.string(), runId: v.id("runs") },
+  returns: v.null(),
+  handler: async (ctx, { workspaceId, runId }) => {
+    const { identity } = await requireMember(ctx, workspaceId);
+    const actor = identity.subject;
+
+    const row = await ctx.db
+      .query("reserveReports")
+      .withIndex("by_run", (q) => q.eq("runId", runId))
+      .unique();
+    if (row === null || row.workspaceId !== workspaceId) {
+      throw new ConvexError({
+        code: "REPORT_NOT_FOUND",
+        message: "That Reserve Report does not exist in this Workspace.",
+      });
+    }
+    if (row.status !== "published") {
+      throw new ConvexError({
+        code: "REPORT_NOT_PUBLISHED",
+        message: "Only a published Reserve Report can start a new version.",
+      });
+    }
+
+    // The snapshot the re-opened draft supersedes: the latest published version
+    // for this Run (max contentVersion; ties broken by insertion order).
+    const snapshots = await ctx.db
+      .query("publishedReportVersions")
+      .withIndex("by_run", (q) => q.eq("runId", runId))
+      .collect();
+    const latest = snapshots.reduce<(typeof snapshots)[number] | null>(
+      (best, s) =>
+        best === null || s.contentVersion >= best.contentVersion ? s : best,
+      null,
+    );
+
+    const now = new Date(Date.now()).toISOString();
+    await ctx.db.patch(row._id, {
+      status: "draft",
+      contentVersion: row.contentVersion + 1,
+      updatedBy: actor,
+      updatedAt: now,
+      supersedes: latest?._id,
+      // Clear the approval record — the re-opened draft is no longer approved.
+      approvedBy: undefined,
+      approvedAt: undefined,
+    });
+
+    await appendAuditEntryInTransaction(ctx, {
+      workspaceId,
+      actor,
+      eventType: "report.newVersionStarted",
+      runId,
+      payload: {
+        runId,
+        contentVersion: row.contentVersion + 1,
+        supersedes: latest?._id ?? null,
+      },
+    });
+
+    return null;
   },
 });
 

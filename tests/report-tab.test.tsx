@@ -282,4 +282,59 @@ describe("ReportTab (Story 6.1, AC-1, AC-2)", () => {
       screen.getByText(/unlocks once the Run completes/i),
     ).toBeTruthy();
   });
+
+  it("a published report + canApprove threads to the published approval composition (Story 6.4)", () => {
+    const h = handlers();
+    const onStartNewVersion = vi.fn().mockResolvedValue(undefined);
+    render(
+      <ReportTab
+        run={makeRun({ hasReserveReport: true })}
+        report={makeReportRow({
+          status: "published",
+          machineDrafted: false,
+          approvedBy: "Priya N.",
+          approvedAt: "2026-07-19T14:32:00.000Z",
+        })}
+        diagnosticsBundle={null}
+        engineOnly={false}
+        seniorActuaries={[{ id: "user_priya", name: "Priya N." }]}
+        onSubmitForReview={vi.fn().mockResolvedValue(undefined)}
+        canApprove={true}
+        overrideCount={0}
+        onApprove={vi.fn().mockResolvedValue(undefined)}
+        onStartNewVersion={onStartNewVersion}
+        {...h}
+      />,
+    );
+    // The editor is read-only (no Save) AND the published composition renders.
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+    expect(screen.getByText("published")).toBeTruthy();
+    expect(screen.getByText(/Approved by Priya N\./)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Start new version" }));
+    expect(onStartNewVersion).toHaveBeenCalledTimes(1);
+  });
+
+  it("an awaiting_review report + canApprove renders the Approve region (Story 6.4)", () => {
+    const h = handlers();
+    render(
+      <ReportTab
+        run={makeRun({ hasReserveReport: true })}
+        report={makeReportRow({
+          status: "awaiting_review",
+          machineDrafted: false,
+          submittedBy: "user_dana",
+        })}
+        diagnosticsBundle={null}
+        engineOnly={false}
+        seniorActuaries={[{ id: "user_priya", name: "Priya N." }]}
+        onSubmitForReview={vi.fn().mockResolvedValue(undefined)}
+        canApprove={true}
+        {...h}
+      />,
+    );
+    expect(
+      screen.getByRole("button", { name: "Approve & publish" }),
+    ).toBeTruthy();
+    expect(screen.getByText(/citations resolve/)).toBeTruthy();
+  });
 });

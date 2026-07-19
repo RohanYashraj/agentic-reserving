@@ -28,7 +28,7 @@ vi.mock("next/link", () => ({
 }));
 
 import { RunDetail, type RunView } from "@/components/RunDetail";
-import type { Id } from "@/convex/_generated/dataModel";
+import type { Doc, Id } from "@/convex/_generated/dataModel";
 import type {
   DiagnosticsBundle,
   ResultSet,
@@ -611,5 +611,70 @@ describe("RunDetail — Report tab (Story 6.1)", () => {
     expect(
       screen.getByRole("button", { name: "Start from a blank template" }),
     ).toBeDefined();
+  });
+
+  const awaitingReportRow = (): Doc<"reserveReports"> => {
+    const section = (text: string) => ({ text, citations: [] as string[] });
+    return {
+      _id: "rep1" as Id<"reserveReports">,
+      _creationTime: 0,
+      workspaceId: "org_A",
+      runId: "r1" as Id<"runs">,
+      status: "awaiting_review",
+      machineDrafted: false,
+      contentVersion: 1,
+      createdBy: "user_a",
+      createdAt: "2026-07-19T00:00:00.000Z",
+      updatedBy: "user_a",
+      updatedAt: "2026-07-19T00:00:00.000Z",
+      submittedBy: "user_dana",
+      report: {
+        schemaVersion: "1.0.0",
+        runId: "r1",
+        machineDrafted: false,
+        executiveSummary: section("The overall position is stable."),
+        methodSelectionRationale: section("Chain ladder was chosen."),
+        movementCommentary: section("No notable movements."),
+        limitations: section("Estimates carry uncertainty."),
+      },
+    };
+  };
+
+  it("Story 6.4: threads canApprove/onApprove/onStartNewVersion through to ReportTab", () => {
+    render(
+      <RunDetail
+        run={{ ...completeRun(), hasReserveReport: true }}
+        report={awaitingReportRow()}
+        onRetry={vi.fn()}
+        onSubmitForReview={vi.fn().mockResolvedValue(undefined)}
+        canApprove={true}
+        overrideCount={0}
+        onApprove={vi.fn().mockResolvedValue(undefined)}
+        onStartNewVersion={vi.fn().mockResolvedValue(undefined)}
+        {...reportHandlers()}
+      />,
+    );
+    fireEvent.focus(screen.getByRole("tab", { name: "Report" }));
+    expect(
+      screen.getByRole("button", { name: "Approve & publish" }),
+    ).toBeDefined();
+  });
+
+  it("Story 6.4: unwired (canApprove omitted) degrades to no approve controls", () => {
+    render(
+      <RunDetail
+        run={{ ...completeRun(), hasReserveReport: true }}
+        report={awaitingReportRow()}
+        onRetry={vi.fn()}
+        onSubmitForReview={vi.fn().mockResolvedValue(undefined)}
+        {...reportHandlers()}
+      />,
+    );
+    fireEvent.focus(screen.getByRole("tab", { name: "Report" }));
+    // The analyst sees the awaiting-review state, not the approve action.
+    expect(screen.getByText("Awaiting Senior Actuary review")).toBeDefined();
+    expect(
+      screen.queryByRole("button", { name: "Approve & publish" }),
+    ).toBeNull();
   });
 });

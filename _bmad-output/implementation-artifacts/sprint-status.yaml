@@ -45,6 +45,8 @@
 
 generated: 2026-07-16
 last_updated: 2026-07-19
+# 2026-07-19: 6-4 → in-progress → review (dev-story)
+# 2026-07-19: 6-4 → ready-for-dev (create-story)
 # 2026-07-19: 6-3 → in-progress → review (dev-story)
 # 2026-07-19: epic-5 code review (all 6 stories) → done; 12 patches applied (incl. HIGH gate-bypass F3 + fail-closed F16), 4 decisions resolved as patches, 4 deferred, 4 dismissed
 # 2026-07-19: 5-6 → ready-for-dev (create-story)
@@ -108,7 +110,7 @@ development_status:
   6-1-report-editor-with-atomic-citation-chips-and-manual-template: review
   6-2-submit-for-review-with-draft-lock: review
   6-3-recommendation-override-by-senior-actuary: review
-  6-4-approve-and-publish: backlog
+  6-4-approve-and-publish: review
   6-5-word-export: backlog
   epic-6-retrospective: optional
 

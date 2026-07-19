@@ -181,10 +181,29 @@ function splitSentences(
 }
 
 /**
+ * Every sentence that STATES A FIGURE — a "claim", cited or not (a figure-bearing
+ * sentence per the gate's figure notion). Masks citation markers and structural
+ * numerals first, then looks for a real figure token, so a sentence whose only
+ * digits live inside a `[[cite:...]]` id or an Origin-year label is NOT a claim.
+ * This is the SINGLE figure-detection source: `uncitedSentences` (the editor's
+ * flag) is its no-marker subset, and 6.4's `reportCitationResolution` (the
+ * approval count) counts these as `totalClaims`. Pure string/metadata (AD-1).
+ */
+export function figureSentences(
+  text: string,
+): { sentence: string; start: number; end: number }[] {
+  return splitSentences(text).filter(({ sentence }) => {
+    const masked = maskStructural(maskMarkers(sentence));
+    return new RegExp(NUMBER_RE).test(masked);
+  });
+}
+
+/**
  * The sentences that STATE A FIGURE but carry NO `[[cite:...]]` marker — the
- * "claim now uncited" flag (D3, UX-DR12). Sentence granularity (finer than the
- * gate's paragraph-block model — documented divergence). Deleting a chip removes
- * its marker, so a sentence that had a cited figure becomes flagged
+ * "claim now uncited" flag (D3, UX-DR12). The no-marker subset of
+ * `figureSentences` (one figure-detection source). Sentence granularity (finer
+ * than the gate's paragraph-block model — documented divergence). Deleting a chip
+ * removes its marker, so a sentence that had a cited figure becomes flagged
  * automatically; re-citing or deleting the sentence clears it naturally. Pure
  * string/metadata over the already-loaded text (AD-1 clean) — no stored boolean,
  * no server round-trip. Backs BOTH the editor's inline flag and 6.4's approval
@@ -193,11 +212,8 @@ function splitSentences(
 export function uncitedSentences(
   text: string,
 ): { sentence: string; start: number; end: number }[] {
-  return splitSentences(text).filter(({ sentence }) => {
-    // A sentence with any marker is treated as cited (not flagged).
-    if (new RegExp(CITE_MARKER_RE).test(sentence)) return false;
-    // Otherwise mask structural numerals, then look for a real figure token.
-    const masked = maskStructural(maskMarkers(sentence));
-    return new RegExp(NUMBER_RE).test(masked);
-  });
+  // A sentence with any marker is treated as cited (not flagged).
+  return figureSentences(text).filter(
+    ({ sentence }) => !new RegExp(CITE_MARKER_RE).test(sentence),
+  );
 }

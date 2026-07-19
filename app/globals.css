@@ -18,6 +18,7 @@
   --color-caution: var(--caution);
   --color-caution-subtle: var(--caution-subtle);
   --color-published: var(--published);
+  --color-published-foreground: var(--published-foreground);
   --color-published-subtle: var(--published-subtle);
   /* Cell padding for triangle/diagnostic grids (DESIGN.md spacing.cell-pad). */
   --spacing-cell-pad: 6px;
@@ -76,6 +77,7 @@
   --caution: #B45309;
   --caution-subtle: #FEF3E2;
   --published: #166534;
+  --published-foreground: #FFFFFF;
   --published-subtle: #E8F5EC;
   --secondary: oklch(0.97 0 0);
   --secondary-foreground: oklch(0.205 0 0);
@@ -119,6 +121,7 @@
   --caution: #F5A94E;
   --caution-subtle: #3A2A12;
   --published: #6EC98A;
+  --published-foreground: #06201E;
   --published-subtle: #12301C;
   --secondary: oklch(0.269 0 0);
   --secondary-foreground: oklch(0.985 0 0);

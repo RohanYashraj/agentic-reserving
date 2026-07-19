@@ -63,6 +63,10 @@ export function ReportTab({
   onCreateManual,
   onGenerateDraft,
   onSubmitForReview,
+  canApprove = false,
+  overrideCount = 0,
+  onApprove,
+  onStartNewVersion,
 }: {
   run: RunView;
   report: Doc<"reserveReports"> | null;
@@ -75,6 +79,12 @@ export function ReportTab({
   onCreateManual: () => Promise<unknown>;
   onGenerateDraft: () => Promise<{ status: "accepted" | "rejected" }>;
   onSubmitForReview?: (assignee: string | null) => Promise<void>;
+  // Story 6.4 (D7): the Senior-Actuary approve surface. All defaulted so pre-6.4
+  // call sites degrade to the read-only analyst view (canApprove=false).
+  canApprove?: boolean;
+  overrideCount?: number;
+  onApprove?: () => Promise<void>;
+  onStartNewVersion?: () => Promise<void>;
 }) {
   if (report) {
     return (
@@ -89,13 +99,18 @@ export function ReportTab({
           diagnosticsBundle={diagnosticsBundle}
           onEditReport={onEditReport}
         />
-        {/* Story 6.2 (D7): the analyst-side approval bar below the editor. When
-            unwired (pre-6.2 call sites) it degrades to nothing. */}
+        {/* Story 6.2/6.4 (D7): the approval bar below the editor. When unwired
+            (pre-6.2 call sites) it degrades to nothing. */}
         {onSubmitForReview && (
           <ReportApprovalBar
             report={report}
             seniorActuaries={seniorActuaries}
             onSubmitForReview={onSubmitForReview}
+            canApprove={canApprove}
+            diagnosticsBundle={diagnosticsBundle}
+            overrideCount={overrideCount}
+            onApprove={onApprove}
+            onStartNewVersion={onStartNewVersion}
           />
         )}
       </div>
@@ -355,16 +370,19 @@ function ReportEditorView({
 
       <div className="space-y-3">
         {SECTION_META.map(({ key, label }) => (
-          <ReportSectionEditor
-            key={key}
-            label={label}
-            text={sections[key]}
-            diagnosticsBundle={diagnosticsBundle}
-            editable={editable}
-            onChange={(nextText) =>
-              setSections((prev) => ({ ...prev, [key]: nextText }))
-            }
-          />
+          // Story 6.4 (D6): the anchor the approval bar's failing-sentence links
+          // scroll to (`scrollToSection` in ReportApprovalBar).
+          <div key={key} id={`report-section-${key}`}>
+            <ReportSectionEditor
+              label={label}
+              text={sections[key]}
+              diagnosticsBundle={diagnosticsBundle}
+              editable={editable}
+              onChange={(nextText) =>
+                setSections((prev) => ({ ...prev, [key]: nextText }))
+              }
+            />
+          </div>
         ))}
       </div>
 

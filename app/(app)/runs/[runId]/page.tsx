@@ -34,6 +34,10 @@ export default function RunDetailPage() {
   // user a Senior Actuary. DISPLAY gating only (the live-vs-disabled Override
   // control); the server `requireRole` is the authority (AD-4).
   const canOverride = normalizeRole(orgRole) === "senior_actuary";
+  // Story 6.4 (D7): the same signal gates the Approve & Publish region (both are
+  // true for a Senior Actuary; kept as a distinct name for clarity). DISPLAY
+  // gating only — the server `requireRole` is the authority (AD-4).
+  const canApprove = normalizeRole(orgRole) === "senior_actuary";
 
   const run = useQuery(
     api.runs.getRun,
@@ -109,6 +113,11 @@ export default function RunDetailPage() {
   // getRecommendationOverrides subscription above (a row inserted on server ack —
   // no optimistic UI, AC-2/D6/D9).
   const overrideRecommendation = useMutation(api.runs.overrideRecommendation);
+  // Story 6.4: the approve-and-publish + start-new-version mutations. Their
+  // durable outcomes land via the getReserveReport subscription above (status
+  // flips to published / back to draft on server ack — no optimistic UI, AC-2/D9).
+  const approveAndPublish = useMutation(api.runs.approveAndPublish);
+  const startNewReportVersion = useMutation(api.runs.startNewReportVersion);
 
   // Story 6.2 (D4): the Senior-Actuary assignee picker source, built CLIENT-side
   // from Clerk memberships (Convex has no Clerk-backend seam). Roles are emitted
@@ -131,6 +140,14 @@ export default function RunDetailPage() {
           (m.publicUserData?.userId ?? m.id),
       }));
   }, [memberships?.data]);
+
+  // Story 6.4 (D8): distinct overridden Origin Periods, for the approval dialog's
+  // "including N recommendation override(s)" restatement. A Set size over
+  // categorical origin labels — NOT reserve-figure arithmetic (AD-1).
+  const overrideCount = useMemo(
+    () => new Set((overrides ?? []).map((o) => o.origin)).size,
+    [overrides],
+  );
 
   const [retryError, setRetryError] = useState<string | null>(null);
 
@@ -240,6 +257,30 @@ export default function RunDetailPage() {
     }
   }
 
+  async function onApprove() {
+    if (!orgId) throw new Error("No active Workspace.");
+    try {
+      // Returns null; the status flip → published lands durably via the
+      // getReserveReport subscription on server ack (no optimistic UI, AC-2/D9).
+      // Surface readable errors (FORBIDDEN / REPORT_HAS_UNCITED_CLAIMS /
+      // REPORT_NOT_APPROVABLE) inline in the approval dialog.
+      await approveAndPublish({ workspaceId: orgId, runId });
+    } catch (err) {
+      throw new Error(errorMessage(err));
+    }
+  }
+
+  async function onStartNewVersion() {
+    if (!orgId) throw new Error("No active Workspace.");
+    try {
+      // Re-opens the working row to a superseding draft; the status flip → draft
+      // lands via the getReserveReport subscription on server ack (D9).
+      await startNewReportVersion({ workspaceId: orgId, runId });
+    } catch (err) {
+      throw new Error(errorMessage(err));
+    }
+  }
+
   return (
     <div className="mx-auto w-full max-w-screen-2xl">
       {run === undefined ? (
@@ -287,6 +328,10 @@ export default function RunDetailPage() {
               overrides={overrides ?? []}
               canOverride={canOverride}
               onOverride={onOverride}
+              canApprove={canApprove}
+              overrideCount={overrideCount}
+              onApprove={onApprove}
+              onStartNewVersion={onStartNewVersion}
             />
           </div>
         </>

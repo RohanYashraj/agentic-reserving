@@ -232,6 +232,15 @@ export default defineSchema({
     assignee: v.optional(v.string()), // Clerk user id of the assigned Senior Actuary (advisory)
     submittedBy: v.optional(v.string()), // Clerk user id of the submitter
     submittedAt: v.optional(v.string()), // ISO-8601 UTC of submission
+    // Story 6.4 approval + versioning metadata. Optional — a report has no
+    // approver until published (D4), no `supersedes` until a new version is
+    // started (D5), and no `draftBaseline` until first human-edited (D9).
+    // Published immutability is enforced by the edit/submit status guards + the
+    // append-only `publishedReportVersions` snapshot (D3), NOT by these columns.
+    approvedBy: v.optional(v.string()), // Clerk user id of the approving Senior Actuary
+    approvedAt: v.optional(v.string()), // ISO-8601 UTC of approval
+    supersedes: v.optional(v.id("publishedReportVersions")), // the published snapshot a re-opened draft supersedes (D5)
+    draftBaseline: v.optional(reserveReportValidator), // the machine-drafted original captured at first human edit (D9)
   })
     // One report per run in 5.4 (re-draft overwrites); Epic 6 versions.
     .index("by_run", ["runId"])
@@ -261,6 +270,32 @@ export default defineSchema({
     .index("by_run", ["runId"])
     // Tenancy scan / Workspace listing.
     .index("by_workspace", ["workspaceId"]),
+
+  // Story 6.4 immutable published record (FR-13). APPEND-ONLY — a snapshot is
+  // inserted on approve, never patched/deleted; it is the durable, signed
+  // published content the approver's signature covers. A separate table (not a
+  // second `reserveReports` row) keeps the `by_run.unique()` invariant intact
+  // across all report functions (D3), mirroring the `recommendationOverrides`
+  // separate-append-only precedent. `overrideCount` = distinct overridden
+  // Origin Periods at approval time (D4). The frozen `report` reuses
+  // `reserveReportValidator` (the drift-checked engine document, unchanged —
+  // AD-10; approval/versioning metadata is product-plane, not part of it).
+  publishedReportVersions: defineTable({
+    workspaceId: v.string(), // Clerk org ID — the Workspace (AD-4 scoping)
+    runId: v.id("runs"), // the Run this published version interprets
+    reportId: v.id("reserveReports"), // the working row that was published
+    contentVersion: v.number(), // the signed in-place edit version (AD-5/FR-13)
+    report: reserveReportValidator, // the frozen, signed content copy (immutable)
+    approvedBy: v.string(), // Clerk user id of the approving Senior Actuary
+    approvedAt: v.string(), // ISO-8601 UTC of approval
+    overrideCount: v.number(), // distinct overridden Origin Periods at approval (D4)
+  })
+    // Latest-version lookup for "Start new version" (D5).
+    .index("by_run", ["runId"])
+    // Tenancy scan / future 7.x version browser.
+    .index("by_workspace", ["workspaceId"])
+    // History for one working row.
+    .index("by_report", ["reportId"]),
 
   // Engine-Only Mode state (Story 5.6, AD-9, D2). The per-Workspace, durable,
   // SERVER-DERIVED system-of-record for the workspace-global Engine-Only Mode:

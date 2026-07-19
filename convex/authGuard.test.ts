@@ -125,6 +125,14 @@ const publicFunctionArgs: Record<string, Record<string, unknown>> = {
   // only). requireMember is the first statement of each (AD-4).
   "runs:submitReportForReview": { workspaceId: "org_test" },
   "runs:listReportsAwaitingReview": { workspaceId: "org_test" },
+  // Story 6.4 — the two new public report-lifecycle mutations, both taking a
+  // v.id("runs") (real runId injected below). approveAndPublish is
+  // requireRole(senior_actuary), but requireRole calls requireMember first, so an
+  // unauthenticated caller is still rejected with UNAUTHENTICATED here (the role
+  // rejection is proven in convex/runs.test.ts). startNewReportVersion is a
+  // requireMember mutation. requireMember is the first-reached guard of each (AD-4).
+  "runs:approveAndPublish": { workspaceId: "org_test" },
+  "runs:startNewReportVersion": { workspaceId: "org_test" },
   // Story 5.6 — the two new public Engine-Only Mode functions. getInterpretationMode
   // is a query, probeInterpretationMode is an ACTION; each has requireMember as its
   // first statement (AD-4). Neither takes a v.id("runs"), so no runId injection.
@@ -297,7 +305,9 @@ describe("auth-guard enumeration (NFR-3)", () => {
         path === "runs:generateReserveReport" ||
         path === "runs:editReserveReport" ||
         path === "runs:createManualReport" ||
-        path === "runs:submitReportForReview"
+        path === "runs:submitReportForReview" ||
+        path === "runs:approveAndPublish" ||
+        path === "runs:startNewReportVersion"
       ) {
         return { ...publicFunctionArgs[path], runId };
       }

@@ -102,6 +102,10 @@ export function RunDetail({
   overrides = [],
   canOverride = false,
   onOverride,
+  canApprove = false,
+  overrideCount = 0,
+  onApprove,
+  onStartNewVersion,
 }: {
   run: RunView;
   resultSet?: ResultSet | null;
@@ -150,6 +154,15 @@ export function RunDetail({
     overridingMethod: Method,
     reason: string,
   ) => Promise<void>;
+  // Story 6.4 (D7): the Senior-Actuary approve surface, threaded to ReportTab.
+  // `canApprove` gates the approve region (display only; the server requireRole
+  // is the authority, AD-4); `overrideCount` (distinct overridden origins) feeds
+  // the approval dialog. All optional so pre-6.4 call sites / the placeholder
+  // path degrade cleanly (no approve controls).
+  canApprove?: boolean;
+  overrideCount?: number;
+  onApprove?: () => Promise<void>;
+  onStartNewVersion?: () => Promise<void>;
 }) {
   const [tab, setTab] = useState<TabKey>("results");
   const [retrying, setRetrying] = useState(false);
@@ -381,6 +394,10 @@ export function RunDetail({
               onCreateManual={onCreateManual}
               onGenerateDraft={onGenerateDraft}
               onSubmitForReview={onSubmitForReview}
+              canApprove={canApprove}
+              overrideCount={overrideCount}
+              onApprove={onApprove}
+              onStartNewVersion={onStartNewVersion}
             />
           ) : (
             <TabPlaceholder>

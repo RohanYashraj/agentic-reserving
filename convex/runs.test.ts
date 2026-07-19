@@ -3529,3 +3529,409 @@ describe("generateReserveReport — fail-closed Engine-Only Mode (D1, AD-9)", ()
     ).toHaveLength(1);
   });
 });
+
+// --- Story 6.4: approve & publish + start new version + baseline capture ------
+
+async function publishedVersionRows(t: Harness) {
+  return await t.run((ctx) => ctx.db.query("publishedReportVersions").collect());
+}
+
+/** Seed a `reserveReports` row with an explicit report document + status. */
+async function seedReportRowWith(
+  t: Harness,
+  runId: Id<"runs">,
+  status: "draft" | "awaiting_review" | "published",
+  report: ReturnType<typeof makeReserveReport>,
+  { workspaceId = "org_A", machineDrafted = false } = {},
+) {
+  return await t.run((ctx) =>
+    ctx.db.insert("reserveReports", {
+      workspaceId,
+      runId,
+      status,
+      machineDrafted,
+      report,
+      contentVersion: 1,
+      createdBy: "user_seed",
+      createdAt: "2026-07-18T00:00:00.000Z",
+      updatedBy: "user_seed",
+      updatedAt: "2026-07-18T00:00:00.000Z",
+    }),
+  );
+}
+
+/** A report whose executiveSummary states a figure with NO citation marker. */
+function makeUncitedReport(runId: string) {
+  const section = (text: string, citations: string[] = []) => ({
+    text,
+    citations,
+  });
+  return {
+    schemaVersion: "1.0.0",
+    runId,
+    machineDrafted: false,
+    executiveSummary: section("The total reserve is 5,339,085."),
+    methodSelectionRationale: section("Chain ladder was chosen."),
+    movementCommentary: section("No notable movements."),
+    limitations: section("Estimates carry uncertainty."),
+  };
+}
+
+describe("approveAndPublish — Senior-Actuary sign-off + immutable publish (AC-1, AC-2)", () => {
+  test("happy path: publishes, snapshots, records approver, audits report.published (lean)", async () => {
+    const t = initConvexTest();
+    const runId = await seedRecommendedRun(t, { origins: ["2019", "2020"] });
+    // Two DISTINCT overridden origins (+ a duplicate to prove dedupe → count 2).
+    await t.run(async (ctx) => {
+      for (const origin of ["2019", "2020", "2019"]) {
+        await ctx.db.insert("recommendationOverrides", {
+          workspaceId: "org_A",
+          runId,
+          origin,
+          overridingMethod: "bornhuetter_ferguson",
+          reason: "seed",
+          overriddenBy: "user_senior",
+          overriddenAt: "2026-07-18T00:00:00.000Z",
+        });
+      }
+    });
+    const reportId = await seedReportRow(t, runId, "awaiting_review");
+
+    const out = await t
+      .withIdentity(seniorA)
+      .mutation(api.runs.approveAndPublish, { workspaceId: "org_A", runId });
+    expect(out).toBeNull();
+
+    const rows = await reserveReportRows(t);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].status).toBe("published");
+    expect(rows[0].approvedBy).toBe("user_senior");
+    expect(typeof rows[0].approvedAt).toBe("string");
+
+    const snapshots = await publishedVersionRows(t);
+    expect(snapshots).toHaveLength(1);
+    expect(snapshots[0]).toMatchObject({
+      workspaceId: "org_A",
+      runId,
+      reportId,
+      contentVersion: 1,
+      approvedBy: "user_senior",
+      overrideCount: 2,
+    });
+    // The frozen content copy is the signed document.
+    expect(snapshots[0].report.executiveSummary.text).toBe(
+      "The overall position is stable.",
+    );
+
+    const audits = (await auditRows(t)).filter(
+      (a) => a.eventType === "report.published",
+    );
+    expect(audits).toHaveLength(1);
+    expect(audits[0].actor).toBe("user_senior");
+    expect(audits[0].runId).toBe(runId);
+    expect(audits[0].payload).toMatchObject({
+      runId,
+      contentVersion: 1,
+      overrideCount: 2,
+    });
+    // Lean payload — no section text/figures.
+    expect(JSON.stringify(audits[0].payload)).not.toContain("stable");
+
+    // The hash chain stays append-only + verifiable.
+    const verified = await t
+      .withIdentity(seniorA)
+      .query(api.auditLogs.verifyChain, { workspaceId: "org_A" });
+    expect(verified.valid).toBe(true);
+  });
+
+  test("an analyst publish is FORBIDDEN server-side — no publish, no snapshot, no audit", async () => {
+    const t = initConvexTest();
+    const runId = await seedInterpretableRun(t);
+    await seedReportRow(t, runId, "awaiting_review");
+
+    let code: string | undefined;
+    try {
+      await t
+        .withIdentity(analystA)
+        .mutation(api.runs.approveAndPublish, { workspaceId: "org_A", runId });
+    } catch (error) {
+      code = (error as ConvexError<{ code: string }>).data.code;
+    }
+    expect(code).toBe("FORBIDDEN");
+    expect((await reserveReportRows(t))[0].status).toBe("awaiting_review");
+    expect(await publishedVersionRows(t)).toHaveLength(0);
+    expect(
+      (await auditRows(t)).filter((a) => a.eventType === "report.published"),
+    ).toHaveLength(0);
+  });
+
+  test("unauthenticated is rejected (AD-4)", async () => {
+    const t = initConvexTest();
+    const runId = await seedInterpretableRun(t);
+    await seedReportRow(t, runId, "awaiting_review");
+    let code: string | undefined;
+    try {
+      await t.mutation(api.runs.approveAndPublish, {
+        workspaceId: "org_A",
+        runId,
+      });
+    } catch (error) {
+      code = (error as ConvexError<{ code: string }>).data.code;
+    }
+    expect(code).toBe("UNAUTHENTICATED");
+  });
+
+  test("unresolved-citation blocking: an uncited claim → REPORT_HAS_UNCITED_CLAIMS, no publish", async () => {
+    const t = initConvexTest();
+    const runId = await seedInterpretableRun(t);
+    await seedReportRowWith(
+      t,
+      runId,
+      "awaiting_review",
+      makeUncitedReport(runId as string),
+    );
+
+    let error: ConvexError<{ code: string; details?: { sections?: string[] } }>;
+    try {
+      await t
+        .withIdentity(seniorA)
+        .mutation(api.runs.approveAndPublish, { workspaceId: "org_A", runId });
+      throw new Error("expected approveAndPublish to throw");
+    } catch (err) {
+      error = err as ConvexError<{
+        code: string;
+        details?: { sections?: string[] };
+      }>;
+    }
+    expect(error.data.code).toBe("REPORT_HAS_UNCITED_CLAIMS");
+    expect(error.data.details?.sections).toContain("executiveSummary");
+    // No publish, no snapshot, no audit.
+    expect((await reserveReportRows(t))[0].status).toBe("awaiting_review");
+    expect(await publishedVersionRows(t)).toHaveLength(0);
+    expect(
+      (await auditRows(t)).filter((a) => a.eventType === "report.published"),
+    ).toHaveLength(0);
+  });
+
+  test("immutability of published content: edits/submits/re-publish rejected; snapshot unchanged", async () => {
+    const t = initConvexTest();
+    const runId = await seedInterpretableRun(t);
+    await seedReportRow(t, runId, "awaiting_review");
+    await t
+      .withIdentity(seniorA)
+      .mutation(api.runs.approveAndPublish, { workspaceId: "org_A", runId });
+    const snapshotBefore = (await publishedVersionRows(t))[0];
+
+    const codeFor = async (p: Promise<unknown>) => {
+      try {
+        await p;
+      } catch (error) {
+        return (error as ConvexError<{ code: string }>).data.code;
+      }
+      throw new Error("expected the call to throw");
+    };
+
+    expect(
+      await codeFor(
+        t.withIdentity(analystA).mutation(api.runs.editReserveReport, {
+          workspaceId: "org_A",
+          runId,
+          sections: {
+            executiveSummary: "tampering",
+            methodSelectionRationale: "",
+            movementCommentary: "",
+            limitations: "",
+          },
+        }),
+      ),
+    ).toBe("REPORT_NOT_EDITABLE");
+    expect(
+      await codeFor(
+        t.withIdentity(analystA).mutation(api.runs.submitReportForReview, {
+          workspaceId: "org_A",
+          runId,
+        }),
+      ),
+    ).toBe("REPORT_NOT_SUBMITTABLE");
+    expect(
+      await codeFor(
+        t.withIdentity(seniorA).mutation(api.runs.approveAndPublish, {
+          workspaceId: "org_A",
+          runId,
+        }),
+      ),
+    ).toBe("REPORT_NOT_APPROVABLE");
+
+    // The append-only snapshot is byte-identical after the rejected attempts.
+    const snapshotsAfter = await publishedVersionRows(t);
+    expect(snapshotsAfter).toHaveLength(1);
+    expect(snapshotsAfter[0]).toEqual(snapshotBefore);
+  });
+
+  test("state guard: a draft → REPORT_NOT_APPROVABLE; cross-tenant → REPORT_NOT_FOUND", async () => {
+    const t = initConvexTest();
+    const runId = await seedInterpretableRun(t, { workspaceId: "org_A" });
+    await seedReportRow(t, runId, "draft");
+
+    let code: string | undefined;
+    try {
+      await t
+        .withIdentity(seniorA)
+        .mutation(api.runs.approveAndPublish, { workspaceId: "org_A", runId });
+    } catch (error) {
+      code = (error as ConvexError<{ code: string }>).data.code;
+    }
+    expect(code).toBe("REPORT_NOT_APPROVABLE");
+
+    // A senior of org_B naming org_A's run under their own workspace.
+    let crossCode: string | undefined;
+    try {
+      await t
+        .withIdentity(seniorB)
+        .mutation(api.runs.approveAndPublish, { workspaceId: "org_B", runId });
+    } catch (error) {
+      crossCode = (error as ConvexError<{ code: string }>).data.code;
+    }
+    expect(crossCode).toBe("REPORT_NOT_FOUND");
+  });
+});
+
+describe("startNewReportVersion + baseline capture (AC-2, D5/D9)", () => {
+  /** Publish a report and return its runId + the snapshot id. */
+  async function publish(t: Harness) {
+    const runId = await seedInterpretableRun(t);
+    await seedReportRow(t, runId, "awaiting_review");
+    await t
+      .withIdentity(seniorA)
+      .mutation(api.runs.approveAndPublish, { workspaceId: "org_A", runId });
+    const snapshot = (await publishedVersionRows(t))[0];
+    return { runId, snapshotId: snapshot._id };
+  }
+
+  test("re-opens a published report to a superseding draft; snapshot stays immutable", async () => {
+    const t = initConvexTest();
+    const { runId, snapshotId } = await publish(t);
+    const before = (await reserveReportRows(t))[0].report;
+
+    const out = await t
+      .withIdentity(analystA)
+      .mutation(api.runs.startNewReportVersion, { workspaceId: "org_A", runId });
+    expect(out).toBeNull();
+
+    const row = (await reserveReportRows(t))[0];
+    expect(row.status).toBe("draft");
+    expect(row.contentVersion).toBe(2);
+    expect(row.supersedes).toBe(snapshotId);
+    expect(row.approvedBy).toBeUndefined();
+    expect(row.approvedAt).toBeUndefined();
+    // Content unchanged — now editable again.
+    expect(row.report).toEqual(before);
+
+    const audits = (await auditRows(t)).filter(
+      (a) => a.eventType === "report.newVersionStarted",
+    );
+    expect(audits).toHaveLength(1);
+    expect(audits[0].payload).toMatchObject({
+      runId,
+      contentVersion: 2,
+      supersedes: snapshotId,
+    });
+
+    // The published snapshot is still present + unchanged (immutable history).
+    const snapshots = await publishedVersionRows(t);
+    expect(snapshots).toHaveLength(1);
+    expect(snapshots[0]._id).toBe(snapshotId);
+  });
+
+  test("a draft / awaiting_review report → REPORT_NOT_PUBLISHED", async () => {
+    const t = initConvexTest();
+    const runId = await seedInterpretableRun(t);
+    await seedReportRow(t, runId, "awaiting_review");
+    let code: string | undefined;
+    try {
+      await t
+        .withIdentity(analystA)
+        .mutation(api.runs.startNewReportVersion, {
+          workspaceId: "org_A",
+          runId,
+        });
+    } catch (error) {
+      code = (error as ConvexError<{ code: string }>).data.code;
+    }
+    expect(code).toBe("REPORT_NOT_PUBLISHED");
+  });
+
+  test("after start-new-version the row is editable again (contentVersion +1)", async () => {
+    const t = initConvexTest();
+    const { runId } = await publish(t);
+    await t
+      .withIdentity(analystA)
+      .mutation(api.runs.startNewReportVersion, { workspaceId: "org_A", runId });
+
+    const out = await t.withIdentity(analystA).mutation(
+      api.runs.editReserveReport,
+      {
+        workspaceId: "org_A",
+        runId,
+        sections: {
+          executiveSummary: "Revised summary.",
+          methodSelectionRationale: "Chain ladder was chosen.",
+          movementCommentary: "No notable movements.",
+          limitations: "Estimates carry uncertainty.",
+        },
+      },
+    );
+    expect(out.contentVersion).toBe(3);
+  });
+
+  test("baseline capture: first machine-draft edit captures draftBaseline once; manual captures none", async () => {
+    const t = initConvexTest();
+    const runId = await seedInterpretableRun(t);
+    // A machine-drafted report (draftBaseline unset).
+    await seedReportRow(t, runId, "draft", { machineDrafted: true });
+    const original = (await reserveReportRows(t))[0].report;
+
+    await t.withIdentity(analystA).mutation(api.runs.editReserveReport, {
+      workspaceId: "org_A",
+      runId,
+      sections: {
+        executiveSummary: "First human edit.",
+        methodSelectionRationale: "Chain ladder was chosen.",
+        movementCommentary: "No notable movements.",
+        limitations: "Estimates carry uncertainty.",
+      },
+    });
+    const afterFirst = (await reserveReportRows(t))[0];
+    expect(afterFirst.machineDrafted).toBe(false);
+    expect(afterFirst.draftBaseline).toEqual(original);
+
+    // A SECOND edit does NOT overwrite the captured baseline.
+    await t.withIdentity(analystA).mutation(api.runs.editReserveReport, {
+      workspaceId: "org_A",
+      runId,
+      sections: {
+        executiveSummary: "Second human edit.",
+        methodSelectionRationale: "Chain ladder was chosen.",
+        movementCommentary: "No notable movements.",
+        limitations: "Estimates carry uncertainty.",
+      },
+    });
+    expect((await reserveReportRows(t))[0].draftBaseline).toEqual(original);
+
+    // A MANUAL report (machineDrafted:false) captures no baseline on edit.
+    const runId2 = await seedInterpretableRun(t);
+    await seedReportRow(t, runId2, "draft", { machineDrafted: false });
+    await t.withIdentity(analystA).mutation(api.runs.editReserveReport, {
+      workspaceId: "org_A",
+      runId: runId2,
+      sections: {
+        executiveSummary: "Hand-authored.",
+        methodSelectionRationale: "",
+        movementCommentary: "",
+        limitations: "",
+      },
+    });
+    const manualRow = (await reserveReportRows(t)).find((r) => r.runId === runId2);
+    expect(manualRow?.draftBaseline).toBeUndefined();
+  });
+});
