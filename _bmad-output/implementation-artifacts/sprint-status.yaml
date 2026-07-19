@@ -44,6 +44,7 @@
 generated: 2026-07-16
 last_updated: 2026-07-19
 # 2026-07-19: epic-4 stories 4-1..4-7 → done after epic-4 code review (15 patches applied, 24 items deferred)
+# 2026-07-19: epic-5 → in-progress; 5-1 → ready-for-dev (create-story) → in-progress → review (dev-story)
 project: agentic-reserving
 project_key: NOKEY
 tracking_system: file-system
@@ -83,8 +84,8 @@ development_status:
   4-7-resultset-re-derivation-from-lineage: done
   epic-4-retrospective: optional
 
-  epic-5: backlog
-  5-1-copilot-agent-with-read-only-tools: backlog
+  epic-5: in-progress
+  5-1-copilot-agent-with-read-only-tools: review
   5-2-provenance-gate-placeholder-rendering-and-numeric-checker: backlog
   5-3-method-recommendations-through-the-gate: backlog
   5-4-reserve-report-drafting-through-the-gate: backlog

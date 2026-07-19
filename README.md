@@ -88,7 +88,7 @@ The `auditLogs` table is append-only and per-Workspace hash-chained: exactly one
 
 ### Reserving engine (Story 2.1, AD-2)
 
-`engine/reserving_engine/` is the pure functional core: plain data in, typed JSON-serialisable Pydantic models out — no file, network, environment, clock, or logging side effects. Purity and the downward-only layering (`engine_service`/`copilot_agent` → `reserving_engine`, never the reverse) are enforced mechanically by import-linter contracts in `engine/pyproject.toml`. `validate_triangle` returns cell-level `{origin, dev, reason}` findings (shape, paid-only monotonicity per PRD OQ-6, missing cells) — never a generic failure. `triangle_hash` — sha256 of the canonical Triangle JSON, frozen by a pinned known-answer test — is *the* Triangle hash for Lineage; it is distinct from the raw-file sha256 (upload dedupe, Epic 3) and the audit-chain hash (`convex/lib/auditChain.ts`), which never share helpers. Lint locally with:
+`engine/reserving_engine/` is the pure functional core: plain data in, typed JSON-serialisable Pydantic models out — no file, network, environment, clock, or logging side effects. Purity and the downward-only layering (`engine_service` → `copilot_agent` → `reserving_engine`, never the reverse — engine_service hosts the agent, both sit above the pure core) are enforced mechanically by import-linter contracts in `engine/pyproject.toml`. `validate_triangle` returns cell-level `{origin, dev, reason}` findings (shape, paid-only monotonicity per PRD OQ-6, missing cells) — never a generic failure. `triangle_hash` — sha256 of the canonical Triangle JSON, frozen by a pinned known-answer test — is *the* Triangle hash for Lineage; it is distinct from the raw-file sha256 (upload dedupe, Epic 3) and the audit-chain hash (`convex/lib/auditChain.ts`), which never share helpers. Lint locally with:
 
 ```bash
 cd engine && uv run ruff check . && uv run lint-imports
@@ -112,6 +112,8 @@ npx convex dev     # Convex function sync (separate terminal)
 ```bash
 cd engine && ENGINE_SERVICE_SECRET=dev-secret uv run uvicorn engine_service.app:create_app --factory
 ```
+
+`copilot_agent` (Story 5.1, AD-8) is the Agno-hosted interpretation agent layer: an agent constructed over Agno's Gemini model abstraction (the official `google-genai` SDK, never raw REST) whose entire data-access boundary is four read-only tool views over one Run's in-memory `ResultSet`/`DiagnosticsBundle` (`list_diagnostics`, `get_diagnostic`, `get_result_fields`, `get_run_metadata`) — no filesystem, network, Convex, or write operations (FR-9). The agent runs with `telemetry=False` and no durable store; the full session transcript (prompt, every tool call/result, response) is returned for audit logging (AD-3). The Gemini API key and model ID are optional `engine_service` config (`GEMINI_API_KEY`/`GEMINI_MODEL_ID`) so engine-only deployments start without a model. It is not yet wired to an HTTP endpoint or Convex — that composition (with the Provenance Gate) lands in later Epic 5 stories.
 
 ### Cross-runtime schema contract (Story 2.6, AD-10)
 
