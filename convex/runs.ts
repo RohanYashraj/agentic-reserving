@@ -1334,6 +1334,17 @@ export const storeReserveReport = internalMutation({
       .withIndex("by_run", (q) => q.eq("runId", runId))
       .unique();
     if (existing !== null) {
+      // A submitted report (Story 6.2, awaiting_review) or published report is
+      // out of the machine re-draft path: even a machine-drafted-but-submitted
+      // row must not be clobbered back to a fresh draft (the submitted version
+      // is what the approver signs — AD-5/D1). Only a `draft` is re-draftable.
+      if (existing.status !== "draft") {
+        throw new ConvexError({
+          code: "REPORT_NOT_EDITABLE",
+          message:
+            "This Reserve Report is no longer a draft and cannot be regenerated.",
+        });
+      }
       // A re-draft overwrites the MACHINE draft (regenerable) and resets it to a
       // fresh machine-owned v1. But it must NEVER silently discard human edits
       // (AD-5: once edited, the version is human-owned) — if the existing row is
@@ -1634,6 +1645,126 @@ export const createManualReport = mutation({
     });
 
     return reportId;
+  },
+});
+
+/**
+ * Submit a draft Reserve Report for review (Story 6.2, AC-1, AC-2, FR-13,
+ * UX-DR14). A MEMBER action — `requireMember` FIRST (AD-4, D1); submitting a
+ * draft is NOT a privileged approval (approve/publish/override are
+ * `requireRole(senior_actuary)` in 6.3/6.4).
+ *
+ * "Race-free" (the AC's word) is Convex transactional serializability + a
+ * `status === "draft"` precondition, NOT client coordination (D1). Two
+ * concurrent submits: one patches draft → awaiting_review; the second re-reads
+ * `awaiting_review` inside its own transaction and throws
+ * `REPORT_NOT_SUBMITTABLE`. The same precondition makes a double-click
+ * idempotent. This mirrors `editReserveReport`'s guard-on-current-state shape.
+ *
+ * The draft LOCK is not new code here: flipping `status` to `awaiting_review`
+ * makes the existing `editReserveReport` guard (`REPORT_NOT_EDITABLE`) reject
+ * edits and the existing `ReportEditorView` render read-only (D2). Submission
+ * is a human-owned lifecycle event, NEVER re-gated (AD-5) — it does not touch
+ * `contentVersion` (the submitted version is the current one, which the
+ * approver signs in 6.4). `assignee` is ADVISORY routing metadata, stored but
+ * role-UNVERIFIED server-side (no Clerk-backend seam in Convex — D4). Audited
+ * `report.submittedForReview` with a LEAN payload ({ runId, contentVersion,
+ * assignee } — no section text/figures; AD-1/AD-6).
+ */
+export const submitReportForReview = mutation({
+  args: {
+    workspaceId: v.string(),
+    runId: v.id("runs"),
+    assignee: v.optional(v.string()),
+  },
+  returns: v.null(),
+  handler: async (ctx, { workspaceId, runId, assignee }) => {
+    const { identity } = await requireMember(ctx, workspaceId);
+    const actor = identity.subject;
+
+    const existing = await ctx.db
+      .query("reserveReports")
+      .withIndex("by_run", (q) => q.eq("runId", runId))
+      .unique();
+    // No existence leak: a vanished / cross-tenant row throws the same
+    // REPORT_NOT_FOUND (mirrors editReserveReport's tenancy posture, :1488).
+    if (existing === null || existing.workspaceId !== workspaceId) {
+      throw new ConvexError({
+        code: "REPORT_NOT_FOUND",
+        message: "That Reserve Report does not exist in this Workspace.",
+      });
+    }
+    // The race guard (D1): only a `draft` is submittable. A second submit / an
+    // already-submitted (awaiting_review) or published report is rejected.
+    if (existing.status !== "draft") {
+      throw new ConvexError({
+        code: "REPORT_NOT_SUBMITTABLE",
+        message:
+          "This Reserve Report is not a draft and cannot be submitted for review.",
+      });
+    }
+
+    const now = new Date(Date.now()).toISOString();
+    await ctx.db.patch(existing._id, {
+      status: "awaiting_review",
+      submittedBy: actor,
+      submittedAt: now,
+      // Advisory routing (D4); omit when not provided.
+      assignee: assignee ?? undefined,
+    });
+
+    await appendAuditEntryInTransaction(ctx, {
+      workspaceId,
+      actor,
+      eventType: "report.submittedForReview",
+      runId,
+      payload: { runId, contentVersion: existing.contentVersion, assignee: assignee ?? null },
+    });
+
+    return null;
+  },
+});
+
+/**
+ * The review-queue DATA PRIMITIVE (Story 6.2, AC-1, D5) — every Reserve Report
+ * awaiting review in this Workspace, lean routing metadata only. Public →
+ * `requireMember` FIRST (AD-4). Workspace-scoped, NOT assignee-filtered — the
+ * 7.3 dashboard queue shows all `awaiting_review` reports with submitter+date
+ * (epics.md:812); the `assignee` is advisory (D4).
+ *
+ * Projects a LEAN row list (`reportId`/`runId`/`submittedBy`/`submittedAt`/
+ * `assignee` — NO `report` document, NO figures; AD-1), newest-submitted first
+ * (a string ISO sort is chronological). This is the query 7.3's dashboard
+ * consumes; 6.2 ships it + the convex-test only (no UI — the dashboard render
+ * is 7.3).
+ */
+export const listReportsAwaitingReview = query({
+  args: { workspaceId: v.string() },
+  returns: v.array(
+    v.object({
+      reportId: v.id("reserveReports"),
+      runId: v.id("runs"),
+      submittedBy: v.optional(v.string()),
+      submittedAt: v.optional(v.string()),
+      assignee: v.optional(v.string()),
+    }),
+  ),
+  handler: async (ctx, { workspaceId }) => {
+    await requireMember(ctx, workspaceId);
+    const rows = await ctx.db
+      .query("reserveReports")
+      .withIndex("by_workspace", (q) => q.eq("workspaceId", workspaceId))
+      .filter((q) => q.eq(q.field("status"), "awaiting_review"))
+      .collect();
+    return rows
+      .map((r) => ({
+        reportId: r._id,
+        runId: r.runId,
+        submittedBy: r.submittedBy,
+        submittedAt: r.submittedAt,
+        assignee: r.assignee,
+      }))
+      .sort((a, b) => (b.submittedAt ?? "").localeCompare(a.submittedAt ?? ""));
   },
 });
 

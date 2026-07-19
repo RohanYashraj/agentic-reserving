@@ -6,6 +6,7 @@ import { DiagnosticsPanels } from "@/components/DiagnosticsPanels";
 import { InterpretationTab } from "@/components/interpretation/InterpretationTab";
 import { RederivationPanel } from "@/components/RederivationPanel";
 import { ReportTab, type ReportSections } from "@/components/report/ReportTab";
+import type { SeniorActuary } from "@/components/report/ReportApprovalBar";
 import { ResultsGrid } from "@/components/ResultsGrid";
 import { StatusBadge } from "@/components/StatusBadge";
 import { StepRail, type RunStatus } from "@/components/StepRail";
@@ -94,6 +95,8 @@ export function RunDetail({
   onEditReport,
   onCreateManual,
   onGenerateDraft,
+  onSubmitForReview,
+  seniorActuaries = [],
   engineOnly = false,
 }: {
   run: RunView;
@@ -128,6 +131,10 @@ export function RunDetail({
   ) => Promise<{ contentVersion: number }>;
   onCreateManual?: () => Promise<unknown>;
   onGenerateDraft?: () => Promise<{ status: "accepted" | "rejected" }>;
+  // Story 6.2: submit-for-review handler + the Senior-Actuary picker source
+  // (client-side Clerk, D4). Optional so the surface degrades where unwired.
+  onSubmitForReview?: (assignee: string | null) => Promise<void>;
+  seniorActuaries?: SeniorActuary[];
 }) {
   const [tab, setTab] = useState<TabKey>("results");
   const [retrying, setRetrying] = useState(false);
@@ -351,9 +358,11 @@ export function RunDetail({
               report={report ?? null}
               diagnosticsBundle={diagnosticsBundle ?? null}
               engineOnly={engineOnly}
+              seniorActuaries={seniorActuaries}
               onEditReport={onEditReport}
               onCreateManual={onCreateManual}
               onGenerateDraft={onGenerateDraft}
+              onSubmitForReview={onSubmitForReview}
             />
           ) : (
             <TabPlaceholder>

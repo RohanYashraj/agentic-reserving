@@ -1,5 +1,6 @@
 # generated: 2026-07-16
 # last_updated: 2026-07-19
+# 2026-07-19: 6-2 → ready-for-dev (create-story)
 # 4-7 status: backlog → ready-for-dev (create-story) → in-progress → review (dev-story)
 # project: agentic-reserving
 # project_key: NOKEY
@@ -103,7 +104,7 @@ development_status:
 
   epic-6: in-progress
   6-1-report-editor-with-atomic-citation-chips-and-manual-template: review
-  6-2-submit-for-review-with-draft-lock: backlog
+  6-2-submit-for-review-with-draft-lock: review
   6-3-recommendation-override-by-senior-actuary: backlog
   6-4-approve-and-publish: backlog
   6-5-word-export: backlog

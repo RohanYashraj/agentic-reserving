@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 
+import { ReportApprovalBar, type SeniorActuary } from "@/components/report/ReportApprovalBar";
 import { ReportSectionEditor } from "@/components/report/ReportSectionEditor";
 import {
   Tooltip,
@@ -57,30 +58,47 @@ export function ReportTab({
   report,
   diagnosticsBundle,
   engineOnly = false,
+  seniorActuaries = [],
   onEditReport,
   onCreateManual,
   onGenerateDraft,
+  onSubmitForReview,
 }: {
   run: RunView;
   report: Doc<"reserveReports"> | null;
   diagnosticsBundle: DiagnosticsBundle | null;
   engineOnly?: boolean;
+  // Story 6.2: the Senior-Actuary picker source (client-side Clerk, D4) and the
+  // submit handler. Defaulted so pre-6.2 call sites / tests still render.
+  seniorActuaries?: SeniorActuary[];
   onEditReport: (sections: ReportSections) => Promise<{ contentVersion: number }>;
   onCreateManual: () => Promise<unknown>;
   onGenerateDraft: () => Promise<{ status: "accepted" | "rejected" }>;
+  onSubmitForReview?: (assignee: string | null) => Promise<void>;
 }) {
   if (report) {
     return (
-      <ReportEditorView
-        // Remount on a new server version (this actor's save acked, or another
-        // actor edited) so the local edit buffer re-initialises from the
-        // canonical stored text — no optimistic UI (EXPERIENCE.md:101-102, AD-3),
-        // and no setState-in-effect (the idiomatic React "reset via key").
-        key={`${report._id}:${report.contentVersion}`}
-        report={report}
-        diagnosticsBundle={diagnosticsBundle}
-        onEditReport={onEditReport}
-      />
+      <div className="space-y-4">
+        <ReportEditorView
+          // Remount on a new server version (this actor's save acked, or another
+          // actor edited) so the local edit buffer re-initialises from the
+          // canonical stored text — no optimistic UI (EXPERIENCE.md:101-102, AD-3),
+          // and no setState-in-effect (the idiomatic React "reset via key").
+          key={`${report._id}:${report.contentVersion}`}
+          report={report}
+          diagnosticsBundle={diagnosticsBundle}
+          onEditReport={onEditReport}
+        />
+        {/* Story 6.2 (D7): the analyst-side approval bar below the editor. When
+            unwired (pre-6.2 call sites) it degrades to nothing. */}
+        {onSubmitForReview && (
+          <ReportApprovalBar
+            report={report}
+            seniorActuaries={seniorActuaries}
+            onSubmitForReview={onSubmitForReview}
+          />
+        )}
+      </div>
     );
   }
 
@@ -317,6 +335,13 @@ function ReportEditorView({
   const provenanceLine = report.machineDrafted
     ? "Drafted by the interpretation layer — every claim cites a diagnostic"
     : `Edited by ${report.updatedBy}`;
+  // Story 6.2 (D9): on submission the sub-line records the submitter (mockup
+  // report-review.html:56). Display-only string formatting — the id is shown
+  // where a name isn't trivially at hand (raw id acceptable, deferred to 7.3).
+  const submittedLine =
+    report.status === "awaiting_review" && report.submittedBy
+      ? ` · submitted by ${report.submittedBy}`
+      : "";
 
   return (
     <div className="space-y-4">
@@ -324,6 +349,7 @@ function ReportEditorView({
         <h2 className="text-sm font-medium text-foreground">Reserve Report</h2>
         <p className="text-xs text-muted-foreground">
           Draft v{report.contentVersion} · {provenanceLine}
+          {submittedLine}
         </p>
       </div>
 

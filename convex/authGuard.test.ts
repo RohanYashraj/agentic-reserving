@@ -105,6 +105,12 @@ const publicFunctionArgs: Record<string, Record<string, unknown>> = {
     },
   },
   "runs:createManualReport": { workspaceId: "org_test" },
+  // Story 6.2 — the two new public functions. submitReportForReview is a
+  // mutation taking a v.id("runs") (real runId injected below); `assignee` is
+  // optional so omit it. listReportsAwaitingReview is a query (workspaceId
+  // only). requireMember is the first statement of each (AD-4).
+  "runs:submitReportForReview": { workspaceId: "org_test" },
+  "runs:listReportsAwaitingReview": { workspaceId: "org_test" },
   // Story 5.6 — the two new public Engine-Only Mode functions. getInterpretationMode
   // is a query, probeInterpretationMode is an ACTION; each has requireMember as its
   // first statement (AD-4). Neither takes a v.id("runs"), so no runId injection.
@@ -274,7 +280,8 @@ describe("auth-guard enumeration (NFR-3)", () => {
         path === "runs:generateRecommendations" ||
         path === "runs:generateReserveReport" ||
         path === "runs:editReserveReport" ||
-        path === "runs:createManualReport"
+        path === "runs:createManualReport" ||
+        path === "runs:submitReportForReview"
       ) {
         return { ...publicFunctionArgs[path], runId };
       }

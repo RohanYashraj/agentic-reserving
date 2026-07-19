@@ -1,15 +1,17 @@
 "use client";
 
-import { useAuth } from "@clerk/nextjs";
+import { useAuth, useOrganization } from "@clerk/nextjs";
 import { ConvexError } from "convex/values";
 import { useAction, useMutation, useQuery } from "convex/react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import { RunDetail } from "@/components/RunDetail";
+import type { SeniorActuary } from "@/components/report/ReportApprovalBar";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import { normalizeRole } from "@/convex/lib/guards";
 
 // Story 4.3 (AC1/2/3/5): the live Run-detail surface. useQuery(getRun) IS a
 // Convex subscription — status updates arrive reactively with no polling
@@ -86,6 +88,32 @@ export default function RunDetailPage() {
   const editReserveReport = useMutation(api.runs.editReserveReport);
   const createManualReport = useMutation(api.runs.createManualReport);
   const generateReserveReport = useAction(api.runs.generateReserveReport);
+  // Story 6.2: the submit-for-review mutation. Its durable outcome is the
+  // getReserveReport subscription above (status flips to awaiting_review on
+  // server ack — no optimistic UI, AC-2/D6).
+  const submitReportForReview = useMutation(api.runs.submitReportForReview);
+
+  // Story 6.2 (D4): the Senior-Actuary assignee picker source, built CLIENT-side
+  // from Clerk memberships (Convex has no Clerk-backend seam). Roles are emitted
+  // as `org:senior_actuary`; normalizeRole strips the prefix. Empty while the
+  // membership list loads. The assignee is advisory routing only — the server
+  // never verifies it (the lock + status flip are the enforced parts).
+  const { memberships } = useOrganization({
+    memberships: { infinite: true },
+  });
+  const seniorActuaries = useMemo<SeniorActuary[]>(() => {
+    return (memberships?.data ?? [])
+      .filter((m) => normalizeRole(m.role) === "senior_actuary")
+      .map((m) => ({
+        id: m.publicUserData?.userId ?? m.id,
+        name:
+          [m.publicUserData?.firstName, m.publicUserData?.lastName]
+            .filter(Boolean)
+            .join(" ") ||
+          m.publicUserData?.identifier ||
+          (m.publicUserData?.userId ?? m.id),
+      }));
+  }, [memberships?.data]);
 
   const [retryError, setRetryError] = useState<string | null>(null);
 
@@ -156,6 +184,22 @@ export default function RunDetailPage() {
     }
   }
 
+  async function onSubmitForReview(assignee: string | null) {
+    if (!orgId) throw new Error("No active Workspace.");
+    try {
+      // The status flip lands durably via the getReserveReport subscription on
+      // server ack (no optimistic UI, AC-2/D6). Pass through the advisory
+      // assignee (or undefined when unassigned).
+      await submitReportForReview({
+        workspaceId: orgId,
+        runId,
+        assignee: assignee ?? undefined,
+      });
+    } catch (err) {
+      throw new Error(errorMessage(err));
+    }
+  }
+
   return (
     <div className="mx-auto w-full max-w-screen-2xl">
       {run === undefined ? (
@@ -198,6 +242,8 @@ export default function RunDetailPage() {
               onEditReport={onEditReport}
               onCreateManual={onCreateManual}
               onGenerateDraft={onGenerateDraft}
+              onSubmitForReview={onSubmitForReview}
+              seniorActuaries={seniorActuaries}
             />
           </div>
         </>

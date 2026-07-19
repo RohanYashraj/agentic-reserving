@@ -2673,6 +2673,265 @@ describe("editReserveReport — human edit, re-derivation, versioning (AC-1, AC-
   });
 });
 
+// --- Story 6.2: Submit for review + draft lock + review queue (AC-1, AC-2) ----
+
+describe("submitReportForReview — draft → awaiting_review, race-free + lock (AC-1, AC-2)", () => {
+  test("submits a draft: patches status/submittedBy/submittedAt/assignee, audits lean, contentVersion UNCHANGED", async () => {
+    const t = initConvexTest();
+    const runId = await seedInterpretableRun(t);
+    await seedReportRow(t, runId, "draft"); // machineDrafted:false, contentVersion:1
+
+    const out = await t.withIdentity(analystA).mutation(
+      api.runs.submitReportForReview,
+      { workspaceId: "org_A", runId, assignee: "user_sa" },
+    );
+    expect(out).toBeNull();
+
+    const rows = await reserveReportRows(t);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].status).toBe("awaiting_review");
+    expect(rows[0].submittedBy).toBe("user_a");
+    expect(typeof rows[0].submittedAt).toBe("string");
+    expect(rows[0].assignee).toBe("user_sa");
+    // Submission is not a content edit — the submitted version is the current one.
+    expect(rows[0].contentVersion).toBe(1);
+
+    const audits = (await auditRows(t)).filter(
+      (a) => a.eventType === "report.submittedForReview",
+    );
+    expect(audits).toHaveLength(1);
+    expect(audits[0].runId).toBe(runId);
+    expect(audits[0].payload).toMatchObject({
+      runId,
+      contentVersion: 1,
+      assignee: "user_sa",
+    });
+    // Lean payload — no section text/figures.
+    expect(JSON.stringify(audits[0].payload)).not.toContain("stable");
+  });
+
+  test("draft LOCK (AC-2): after submit, an editReserveReport attempt is REPORT_NOT_EDITABLE", async () => {
+    const t = initConvexTest();
+    const runId = await seedInterpretableRun(t);
+    await seedReportRow(t, runId, "draft");
+    await t
+      .withIdentity(analystA)
+      .mutation(api.runs.submitReportForReview, { workspaceId: "org_A", runId });
+
+    let code: string | undefined;
+    try {
+      await t.withIdentity(analystA).mutation(api.runs.editReserveReport, {
+        workspaceId: "org_A",
+        runId,
+        sections: {
+          executiveSummary: "trying to edit a locked report",
+          methodSelectionRationale: "",
+          movementCommentary: "",
+          limitations: "",
+        },
+      });
+    } catch (error) {
+      code = (error as ConvexError<{ code: string }>).data.code;
+    }
+    expect(code).toBe("REPORT_NOT_EDITABLE");
+  });
+
+  test("a second submit on an awaiting_review row → REPORT_NOT_SUBMITTABLE (race/idempotency guard, D1)", async () => {
+    const t = initConvexTest();
+    const runId = await seedInterpretableRun(t);
+    await seedReportRow(t, runId, "draft");
+    await t
+      .withIdentity(analystA)
+      .mutation(api.runs.submitReportForReview, { workspaceId: "org_A", runId });
+
+    let code: string | undefined;
+    try {
+      await t
+        .withIdentity(analystA)
+        .mutation(api.runs.submitReportForReview, { workspaceId: "org_A", runId });
+    } catch (error) {
+      code = (error as ConvexError<{ code: string }>).data.code;
+    }
+    expect(code).toBe("REPORT_NOT_SUBMITTABLE");
+  });
+
+  test("submitting a published report → REPORT_NOT_SUBMITTABLE", async () => {
+    const t = initConvexTest();
+    const runId = await seedInterpretableRun(t);
+    await seedReportRow(t, runId, "published");
+    let code: string | undefined;
+    try {
+      await t
+        .withIdentity(analystA)
+        .mutation(api.runs.submitReportForReview, { workspaceId: "org_A", runId });
+    } catch (error) {
+      code = (error as ConvexError<{ code: string }>).data.code;
+    }
+    expect(code).toBe("REPORT_NOT_SUBMITTABLE");
+  });
+
+  test("cross-tenant / vanished row → REPORT_NOT_FOUND (no existence leak)", async () => {
+    const t = initConvexTest();
+    const runId = await seedInterpretableRun(t, { workspaceId: "org_A" });
+    await seedReportRow(t, runId, "draft");
+    let code: string | undefined;
+    try {
+      await t
+        .withIdentity(analystB)
+        .mutation(api.runs.submitReportForReview, { workspaceId: "org_B", runId });
+    } catch (error) {
+      code = (error as ConvexError<{ code: string }>).data.code;
+    }
+    expect(code).toBe("REPORT_NOT_FOUND");
+    // Unchanged: still a draft in org_A.
+    expect((await reserveReportRows(t))[0].status).toBe("draft");
+  });
+
+  test("unauthenticated is rejected (AD-4)", async () => {
+    const t = initConvexTest();
+    const runId = await seedInterpretableRun(t);
+    await seedReportRow(t, runId, "draft");
+    let code: string | undefined;
+    try {
+      await t.mutation(api.runs.submitReportForReview, {
+        workspaceId: "org_A",
+        runId,
+      });
+    } catch (error) {
+      code = (error as ConvexError<{ code: string }>).data.code;
+    }
+    expect(code).toBe("UNAUTHENTICATED");
+  });
+
+  test("assignee omitted → stored assignee unset, audit assignee:null, still succeeds (D4 edge)", async () => {
+    const t = initConvexTest();
+    const runId = await seedInterpretableRun(t);
+    await seedReportRow(t, runId, "draft");
+    await t
+      .withIdentity(analystA)
+      .mutation(api.runs.submitReportForReview, { workspaceId: "org_A", runId });
+
+    const rows = await reserveReportRows(t);
+    expect(rows[0].status).toBe("awaiting_review");
+    expect(rows[0].assignee).toBeUndefined();
+    const audits = (await auditRows(t)).filter(
+      (a) => a.eventType === "report.submittedForReview",
+    );
+    expect(audits[0].payload.assignee).toBeNull();
+  });
+
+  test("submit keeps the auditLogs hash chain append-only + verifiable", async () => {
+    const t = initConvexTest();
+    const runId = await seedInterpretableRun(t);
+    await seedReportRow(t, runId, "draft");
+    await t
+      .withIdentity(analystA)
+      .mutation(api.runs.submitReportForReview, { workspaceId: "org_A", runId });
+    const verified = await t
+      .withIdentity(analystA)
+      .query(api.auditLogs.verifyChain, { workspaceId: "org_A" });
+    expect(verified.valid).toBe(true);
+  });
+});
+
+describe("listReportsAwaitingReview — the review-queue primitive (AC-1, D5)", () => {
+  /** Insert an awaiting_review row with an explicit submittedAt (for ordering). */
+  async function seedSubmitted(
+    t: Harness,
+    runId: Id<"runs">,
+    submittedAt: string,
+    { workspaceId = "org_A", submittedBy = "user_a", assignee = "user_sa" } = {},
+  ) {
+    return await t.run((ctx) =>
+      ctx.db.insert("reserveReports", {
+        workspaceId,
+        runId,
+        status: "awaiting_review",
+        machineDrafted: false,
+        report: makeReserveReport(runId as string),
+        contentVersion: 1,
+        createdBy: "user_seed",
+        createdAt: "2026-07-18T00:00:00.000Z",
+        updatedBy: "user_seed",
+        updatedAt: "2026-07-18T00:00:00.000Z",
+        submittedBy,
+        submittedAt,
+        assignee,
+      }),
+    );
+  }
+
+  test("returns exactly the awaiting_review rows as a lean projection (no report doc)", async () => {
+    const t = initConvexTest();
+    const runId = await seedInterpretableRun(t);
+    const reportId = await seedSubmitted(t, runId, "2026-07-19T10:00:00.000Z");
+
+    const queue = await t
+      .withIdentity(analystA)
+      .query(api.runs.listReportsAwaitingReview, { workspaceId: "org_A" });
+    expect(queue).toHaveLength(1);
+    expect(queue[0]).toEqual({
+      reportId,
+      runId,
+      submittedBy: "user_a",
+      submittedAt: "2026-07-19T10:00:00.000Z",
+      assignee: "user_sa",
+    });
+    // Lean — no report document leaks.
+    expect(queue[0]).not.toHaveProperty("report");
+  });
+
+  test("draft and published reports are NOT returned", async () => {
+    const t = initConvexTest();
+    const draftRun = await seedInterpretableRun(t);
+    await seedReportRow(t, draftRun, "draft");
+    const publishedRun = await seedInterpretableRun(t);
+    await seedReportRow(t, publishedRun, "published");
+
+    const queue = await t
+      .withIdentity(analystA)
+      .query(api.runs.listReportsAwaitingReview, { workspaceId: "org_A" });
+    expect(queue).toHaveLength(0);
+  });
+
+  test("a report in a different Workspace is NOT returned (tenancy)", async () => {
+    const t = initConvexTest();
+    const otherRun = await seedInterpretableRun(t, { workspaceId: "org_B" });
+    await seedSubmitted(t, otherRun, "2026-07-19T10:00:00.000Z", {
+      workspaceId: "org_B",
+    });
+
+    const queue = await t
+      .withIdentity(analystA)
+      .query(api.runs.listReportsAwaitingReview, { workspaceId: "org_A" });
+    expect(queue).toHaveLength(0);
+  });
+
+  test("newest-submitted first", async () => {
+    const t = initConvexTest();
+    const older = await seedInterpretableRun(t);
+    await seedSubmitted(t, older, "2026-07-19T08:00:00.000Z");
+    const newer = await seedInterpretableRun(t);
+    await seedSubmitted(t, newer, "2026-07-19T12:00:00.000Z");
+
+    const queue = await t
+      .withIdentity(analystA)
+      .query(api.runs.listReportsAwaitingReview, { workspaceId: "org_A" });
+    expect(queue.map((q) => q.runId)).toEqual([newer, older]);
+  });
+
+  test("unauthenticated is rejected (AD-4)", async () => {
+    const t = initConvexTest();
+    let code: string | undefined;
+    try {
+      await t.query(api.runs.listReportsAwaitingReview, { workspaceId: "org_A" });
+    } catch (error) {
+      code = (error as ConvexError<{ code: string }>).data.code;
+    }
+    expect(code).toBe("UNAUTHENTICATED");
+  });
+});
+
 // --- Story 5.6: Engine-Only Mode fail-closed wiring (AC-1, AC-4, AD-9) -------
 
 async function modeRow(t: Harness, workspaceId = "org_A") {

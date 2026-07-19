@@ -219,6 +219,54 @@ describe("ReportTab (Story 6.1, AC-1, AC-2)", () => {
     expect(screen.queryAllByRole("textbox")).toHaveLength(0);
   });
 
+  it("a report present + onSubmitForReview → the ReportApprovalBar renders below the editor (Story 6.2)", () => {
+    const h = handlers();
+    render(
+      <ReportTab
+        run={makeRun({ hasReserveReport: true })}
+        report={makeReportRow()}
+        diagnosticsBundle={null}
+        engineOnly={false}
+        seniorActuaries={[{ id: "user_priya", name: "Priya N." }]}
+        onSubmitForReview={vi.fn().mockResolvedValue(undefined)}
+        {...h}
+      />,
+    );
+    expect(
+      screen.getByRole("button", { name: "Submit for review" }),
+    ).toBeTruthy();
+  });
+
+  it("an awaiting_review report → editor read-only (no Save) + the '· submitted by' sub-line (Story 6.2, D9)", () => {
+    const h = handlers();
+    render(
+      <ReportTab
+        run={makeRun({ hasReserveReport: true })}
+        report={makeReportRow({
+          status: "awaiting_review",
+          machineDrafted: false,
+          submittedBy: "user_dana",
+          assignee: "user_priya",
+        })}
+        diagnosticsBundle={null}
+        engineOnly={false}
+        seniorActuaries={[{ id: "user_priya", name: "Priya N." }]}
+        onSubmitForReview={vi.fn().mockResolvedValue(undefined)}
+        {...h}
+      />,
+    );
+    // The 6.1 editable=false path: read-only, no Save.
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+    expect(screen.queryAllByRole("textbox")).toHaveLength(0);
+    // The D9 sub-line.
+    expect(screen.getByText(/submitted by user_dana/)).toBeTruthy();
+    // The bar's awaiting-review state.
+    expect(screen.getByText("Awaiting Senior Actuary review")).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "Submit for review" }),
+    ).toBeNull();
+  });
+
   it("before the Run completes with no report → the unlock placeholder", () => {
     const h = handlers();
     render(

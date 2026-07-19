@@ -224,6 +224,13 @@ export default defineSchema({
     createdAt: v.string(), // ISO-8601 UTC
     updatedBy: v.string(), // Clerk user id of the last writer (machine actor or human editor)
     updatedAt: v.string(), // ISO-8601 UTC of the last write
+    // Story 6.2 submission metadata (draft → awaiting_review). Optional — a
+    // `draft` has no submitter/assignee until it is submitted (6.2). `assignee`
+    // is ADVISORY routing (role-unverified server-side — no Clerk-backend seam;
+    // D4); the lock + status flip are the enforced parts.
+    assignee: v.optional(v.string()), // Clerk user id of the assigned Senior Actuary (advisory)
+    submittedBy: v.optional(v.string()), // Clerk user id of the submitter
+    submittedAt: v.optional(v.string()), // ISO-8601 UTC of submission
   })
     // One report per run in 5.4 (re-draft overwrites); Epic 6 versions.
     .index("by_run", ["runId"])
