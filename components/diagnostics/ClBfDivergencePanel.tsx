@@ -1,6 +1,8 @@
 import { AccessibleChart } from "@/components/diagnostics/AccessibleChart";
 import { DiagnosticId } from "@/components/diagnostics/DiagnosticId";
+import { useDiagnosticSelection } from "@/components/diagnostics/selection";
 import type { DiagnosticsBundle } from "@/convex/lib/engineContract";
+import { cn } from "@/lib/utils";
 import { formatFigure, formatPercent, formatSignedFigure } from "@/lib/formatNumber";
 
 // Story 4.5 (AC2/3/4/5/6): CL-vs-BF divergence by Origin Period. Rendered ONLY
@@ -8,12 +10,19 @@ import { formatFigure, formatPercent, formatSignedFigure } from "@/lib/formatNum
 // null (absent, not empty — Story 2.4 semantics). Bars are display geometry
 // (height ∝ |divergence| / maxAbs); every printed figure (divergence, relative)
 // is a STORED field — never clUltimate − bfUltimate in React (AD-1).
+//
+// Story 4.6 (AC1/4): each bar is a selection control + `#<diagnosticId>` scroll
+// target (the compact chart encoding carries no visible chip, so the bar itself
+// selects on click/Enter/Space and carries `id={e.id}`). The table-view rows
+// select through their DiagnosticId chip; chart and table are mutually
+// exclusive (AccessibleChart), so `id={e.id}` is never duplicated.
 
 // The container only mounts this with a non-null array.
 type DivergenceElements = NonNullable<DiagnosticsBundle["clBfDivergence"]>;
 type DivergenceElement = DivergenceElements[number];
 
 function Bars({ elements }: { elements: DivergenceElement[] }) {
+  const { selectedId, select } = useDiagnosticSelection();
   // Axis scale only — never shown as a number (AD-1 display geometry).
   const maxAbs = Math.max(...elements.map((e) => Math.abs(e.divergence)), 1);
   return (
@@ -23,14 +32,21 @@ function Bars({ elements }: { elements: DivergenceElement[] }) {
           key={e.id}
           className="flex flex-1 flex-col items-center justify-end gap-1"
         >
-          {/* The bar is the Diagnostic-ID anchor: id in title (hoverable),
-              full detail in aria-label (AC3). */}
-          <div
-            tabIndex={0}
-            className="w-full rounded-t bg-primary/75"
-            style={{ height: `${(Math.abs(e.divergence) / maxAbs) * 100}%` }}
+          {/* The bar is the Diagnostic-ID anchor AND the selection control: id
+              in title (hoverable), full detail in aria-label, selects into the
+              context rail on click/Enter/Space (AC1/4). */}
+          <button
+            type="button"
+            id={e.id}
             title={e.id}
+            aria-current={selectedId === e.id ? "true" : undefined}
             aria-label={`Origin ${e.origin}, divergence ${formatSignedFigure(e.divergence)}, ${e.id}`}
+            onClick={() => select(e.id)}
+            className={cn(
+              "w-full rounded-t bg-primary/75 hover:bg-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary",
+              selectedId === e.id && "ring-2 ring-primary ring-offset-1",
+            )}
+            style={{ height: `${(Math.abs(e.divergence) / maxAbs) * 100}%` }}
           />
           <span className="numeric text-[9px] text-muted-foreground">
             {e.origin}

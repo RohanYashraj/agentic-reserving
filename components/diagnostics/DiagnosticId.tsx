@@ -1,3 +1,6 @@
+"use client";
+
+import { useDiagnosticSelection } from "@/components/diagnostics/selection";
 import { cn } from "@/lib/utils";
 
 // Story 4.5 (AC3, UX-DR10): every diagnostic element carries its Diagnostic ID
@@ -7,11 +10,14 @@ import { cn } from "@/lib/utils";
 // for Diagnostic-ID references / Lineage links (DESIGN.md:89,126), used for
 // nothing else in these panels.
 //
-// This is NOT the interactive citation chip (Interpretation, Epic 5) and NOT
-// the context rail (Story 4.6): the anchor is an identity label only. It is
-// kept keyboard-focusable and semantically addressable so Story 4.6 can attach
-// selection + a DOM scroll-target `id` to it mechanically — but it wires no
-// click/select/deep-link behaviour here.
+// Story 4.6 (AC1/3/4): the chip is now the element's SELECTION control and its
+// DOM scroll target. It is a real <button> (Enter/Space for free) that selects
+// the element into the context rail on click, carries `id={id}` (the
+// `#<diagnosticId>` deep-link target — canonical id verbatim), and shows a
+// primary-teal selected ring + `aria-current` when selected. Teal (the working
+// colour, DESIGN.md:88) is deliberately NOT violet, so "selected" and "ID
+// reference" never read ambiguously. Resolve/scroll to these ids with
+// getElementById — never a CSS selector (canonical ids contain ":").
 
 export function DiagnosticId({
   id,
@@ -20,16 +26,23 @@ export function DiagnosticId({
   id: string;
   className?: string;
 }) {
+  const { selectedId, select } = useDiagnosticSelection();
+  const selected = selectedId === id;
   return (
-    <span
-      tabIndex={0}
+    <button
+      type="button"
+      id={id}
       title={id}
+      aria-current={selected ? "true" : undefined}
+      onClick={() => select(id)}
       className={cn(
         "numeric inline-block rounded bg-provenance-subtle px-1.5 py-0.5 text-[11px] leading-none text-provenance",
+        "cursor-pointer hover:bg-provenance/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary",
+        selected && "ring-2 ring-primary ring-offset-1",
         className,
       )}
     >
       {id}
-    </span>
+    </button>
   );
 }

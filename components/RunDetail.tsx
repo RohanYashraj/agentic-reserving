@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import { DiagnosticsPanels } from "@/components/DiagnosticsPanels";
 import { ResultsGrid } from "@/components/ResultsGrid";
@@ -78,6 +78,27 @@ export function RunDetail({
 }) {
   const [tab, setTab] = useState<TabKey>("results");
   const [retrying, setRetrying] = useState(false);
+  // Deep-link (Story 4.6 AC4): a URL hash names a Diagnostic to open. On mount
+  // and on in-app hashchange (future citation chips set location.hash), a
+  // non-empty hash switches to the Diagnostics tab and targets the element.
+  // The fragment IS the canonical `dx:…` id verbatim (raw ":" kept — the rail
+  // resolves it via getElementById, never a CSS selector).
+  const [initialSelectedId, setInitialSelectedId] = useState<string | null>(
+    null,
+  );
+
+  useEffect(() => {
+    function applyHash() {
+      const id = window.location.hash.replace(/^#/, "");
+      if (id) {
+        setInitialSelectedId(id);
+        setTab("diagnostics");
+      }
+    }
+    applyHash();
+    window.addEventListener("hashchange", applyHash);
+    return () => window.removeEventListener("hashchange", applyHash);
+  }, []);
 
   const rowState = methodRowState(run.status);
 
@@ -178,7 +199,11 @@ export function RunDetail({
 
         <TabsContent value="diagnostics">
           {diagnosticsBundle ? (
-            <DiagnosticsPanels diagnosticsBundle={diagnosticsBundle} />
+            <DiagnosticsPanels
+              diagnosticsBundle={diagnosticsBundle}
+              runId={run._id}
+              initialSelectedId={initialSelectedId}
+            />
           ) : (
             <TabPlaceholder>
               {run.hasDiagnostics

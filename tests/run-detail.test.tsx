@@ -1,7 +1,13 @@
 // @vitest-environment jsdom
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 // next/link (used by the embedded StepRail) → bare anchor under jsdom.
@@ -28,6 +34,11 @@ import type {
 } from "@/convex/lib/engineContract";
 
 afterEach(cleanup);
+// Story 4.6: the deep-link tests set window.location.hash — reset it so it
+// never leaks into other cases.
+afterEach(() => {
+  window.location.hash = "";
+});
 
 function makeRun(overrides: Partial<RunView> = {}): RunView {
   return {
@@ -276,6 +287,26 @@ describe("RunDetail (AC2, AC3, AC4)", () => {
       screen.getByText(/LDF stability by development period/i),
     ).toBeDefined();
     expect(screen.getByText(/Residual heatmap/i)).toBeDefined();
+  });
+
+  it("deep link: a #<diagnosticId> hash opens the Diagnostics tab + selects it (Story 4.6, AC4)", () => {
+    window.location.hash = "#dx:r1:residual:2019:12";
+    const { container } = render(
+      <RunDetail
+        run={makeRun({ status: "complete", hasDiagnostics: true })}
+        diagnosticsBundle={makeDiagnosticsBundle()}
+        onRetry={vi.fn()}
+      />,
+    );
+    // No tab click needed — the hash switched the active tab to Diagnostics…
+    expect(screen.getByText(/Residual heatmap/i)).toBeDefined();
+    // …and the addressed residual is selected into the context rail.
+    const rail = within(
+      container.querySelector(
+        'aside[aria-label="Selected diagnostic detail"]',
+      ) as HTMLElement,
+    );
+    expect(rail.getByText("Residual 2019 · 12→24")).toBeDefined();
   });
 
   it("no polling primitive: the component has no interval/timeout-based refetch (FR-20)", () => {
