@@ -11,7 +11,10 @@ import {
   DiagnosticSelectionProvider,
   useDiagnosticSelection,
 } from "@/components/diagnostics/selection";
-import type { DiagnosticsBundle } from "@/convex/lib/engineContract";
+import type {
+  DiagnosticsBundle,
+  Recommendations,
+} from "@/convex/lib/engineContract";
 import { cn } from "@/lib/utils";
 
 // Story 4.5 (AC2/6): the four Diagnostics panels rendered from the stored
@@ -35,10 +38,14 @@ function DiagnosticsPanelsInner({
   diagnosticsBundle,
   runId,
   initialSelectedId,
+  recommendations,
 }: {
   diagnosticsBundle: DiagnosticsBundle;
   runId: string;
   initialSelectedId?: string | null;
+  // Story 5.5 (AC3): the interpretation-claims citation source for the rail's
+  // "cited by N report claims" backlink. null until an Interpretation exists.
+  recommendations?: Recommendations | null;
 }) {
   const { selectedId, select } = useDiagnosticSelection();
   const { ldfStability, ave, clBfDivergence, residuals } = diagnosticsBundle;
@@ -98,6 +105,7 @@ function DiagnosticsPanelsInner({
         <DiagnosticContextRail
           diagnosticsBundle={diagnosticsBundle}
           runId={runId}
+          recommendations={recommendations}
         />
       </aside>
     </div>
@@ -108,10 +116,12 @@ export function DiagnosticsPanels({
   diagnosticsBundle,
   runId,
   initialSelectedId,
+  recommendations,
 }: {
   diagnosticsBundle: DiagnosticsBundle;
   runId: string;
   initialSelectedId?: string | null;
+  recommendations?: Recommendations | null;
 }) {
   return (
     <DiagnosticSelectionProvider>
@@ -119,6 +129,7 @@ export function DiagnosticsPanels({
         diagnosticsBundle={diagnosticsBundle}
         runId={runId}
         initialSelectedId={initialSelectedId}
+        recommendations={recommendations}
       />
     </DiagnosticSelectionProvider>
   );

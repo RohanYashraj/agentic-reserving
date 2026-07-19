@@ -1736,6 +1736,15 @@ describe("generateRecommendations action — persist / audit / fail-closed (AC-2
     expect((await getRun(t, runId))?.recommendations).toEqual(makeRecommendations(runId));
     const audits = (await auditRows(t)).filter((a) => a.eventType === "run.recommended");
     expect(audits).toHaveLength(1);
+    // Story 5.5: the TRIGGER is audited too (AD-6/FR-15) — one entry, lean
+    // `{ runId }` payload, the same actor as the completion event.
+    const triggered = (await auditRows(t)).filter(
+      (a) => a.eventType === "run.interpretationTriggered",
+    );
+    expect(triggered).toHaveLength(1);
+    expect(triggered[0].runId).toBe(runId);
+    expect(triggered[0].actor).toBe("user_a");
+    expect(triggered[0].payload).toMatchObject({ runId });
   });
 
   test("rejected → audits run.interpretationRejected, persists no recommendations", async () => {
@@ -1759,6 +1768,14 @@ describe("generateRecommendations action — persist / audit / fail-closed (AC-2
       (a) => a.eventType === "run.interpretationRejected",
     );
     expect(audits).toHaveLength(1);
+    // Story 5.5: the trigger fires on the rejected path too — intent was recorded
+    // before the engine exhausted its redraft attempts.
+    const triggered = (await auditRows(t)).filter(
+      (a) => a.eventType === "run.interpretationTriggered",
+    );
+    expect(triggered).toHaveLength(1);
+    expect(triggered[0].runId).toBe(runId);
+    expect(triggered[0].payload).toMatchObject({ runId });
   });
 
   test("engine model_unavailable propagates as engine.model_unavailable (AD-9)", async () => {
@@ -1803,6 +1820,29 @@ describe("generateRecommendations action — persist / audit / fail-closed (AC-2
     }
     expect(code).toBe("RUN_NOT_INTERPRETABLE");
     expect(fetchMock).not.toHaveBeenCalled();
+    // Story 5.5: log-after-guard — a non-interpretable run throws before the
+    // trigger is logged, so NO triggered event with no matching outcome exists.
+    expect(
+      (await auditRows(t)).filter(
+        (a) => a.eventType === "run.interpretationTriggered",
+      ),
+    ).toHaveLength(0);
+  });
+
+  test("recordInterpretationTriggered no-ops on a vanished / cross-tenant run", async () => {
+    const t = initConvexTest();
+    const runId = await seedInterpretableRun(t, { workspaceId: "org_A" });
+    // Wrong workspace → guarded no-op (no audit entry, nothing thrown).
+    await t.mutation(internal.runs.recordInterpretationTriggered, {
+      runId,
+      workspaceId: "org_B",
+      actor: "user_b",
+    });
+    expect(
+      (await auditRows(t)).filter(
+        (a) => a.eventType === "run.interpretationTriggered",
+      ),
+    ).toHaveLength(0);
   });
 
   test("unauthenticated is rejected before the engine call (AD-4)", async () => {

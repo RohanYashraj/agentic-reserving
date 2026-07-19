@@ -954,6 +954,35 @@ export const recordInterpretationRejection = internalMutation({
 });
 
 /**
+ * Record the TRIGGERING of an Interpretation — append a `run.interpretationTriggered`
+ * audit entry (Story 5.5, AD-6/FR-15). Completion (`run.recommended`) and failure
+ * (`run.interpretationRejected`) were already audited (5.3); this fills the missing
+ * third leg so all of triggering/completion/failure are logged. Mirrors
+ * `recordInterpretationRejection`'s shape: guarded so a vanished / cross-tenant run
+ * no-ops (defence-in-depth — the action only calls this after `getRunForRecommend`
+ * has passed the tenancy check). Single audit writer via
+ * `appendAuditEntryInTransaction`. Lean payload — records intent, NO figures.
+ */
+export const recordInterpretationTriggered = internalMutation({
+  args: {
+    runId: v.id("runs"),
+    workspaceId: v.string(),
+    actor: v.string(),
+  },
+  handler: async (ctx, { runId, workspaceId, actor }) => {
+    const run = await ctx.db.get(runId);
+    if (run === null || run.workspaceId !== workspaceId) return;
+    await appendAuditEntryInTransaction(ctx, {
+      workspaceId,
+      actor,
+      eventType: "run.interpretationTriggered",
+      runId,
+      payload: { runId },
+    });
+  },
+});
+
+/**
  * Generate per-Origin-Period Method recommendations through the Provenance Gate
  * (Story 5.3, FR-10, AD-5). A public ACTION (it must `fetch` the engine):
  * `requireMember` is its FIRST statement (AD-4), BEFORE the engine call, so an
@@ -987,6 +1016,16 @@ export const generateRecommendations = action({
       internal.runs.getRunForRecommend,
       { runId, workspaceId },
     );
+
+    // Story 5.5 (AD-6/FR-15): audit the TRIGGER of interpretation. Logged AFTER
+    // getRunForRecommend passes the tenancy/interpretability check (not before) so
+    // a bad/cross-tenant runId that never reaches the engine leaves no triggered
+    // event with no matching outcome. The completion/failure events follow below.
+    await ctx.runMutation(internal.runs.recordInterpretationTriggered, {
+      runId,
+      workspaceId,
+      actor,
+    });
 
     // callEngine maps the engine error envelope → engine.<code>; a missing model
     // surfaces as `engine.model_unavailable` (the typed signal Story 5.6 keys

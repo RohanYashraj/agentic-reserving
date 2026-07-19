@@ -1,7 +1,16 @@
 "use client";
 
+import {
+  buildDiagnosticIndex,
+  KIND_LABEL,
+  resolveDiagnostic,
+  type ResolvedDiagnostic,
+} from "@/components/diagnostics/resolveDiagnostic";
 import { useDiagnosticSelection } from "@/components/diagnostics/selection";
-import type { DiagnosticsBundle } from "@/convex/lib/engineContract";
+import type {
+  DiagnosticsBundle,
+  Recommendations,
+} from "@/convex/lib/engineContract";
 import {
   formatFactor,
   formatFigure,
@@ -19,35 +28,30 @@ import {
 // citations arrive with Interpretation (Epic 5) / the Report editor (Epic 6);
 // there is no citation query here (AC6/AC8).
 
-type Kind = "ldf_stability" | "ave" | "cl_bf_divergence" | "residual";
+// The id→element index, KIND_LABEL, and the ResolvedDiagnostic type now live in
+// the shared `resolveDiagnostic` module (Story 5.5) so the CitationChip preview
+// and this rail resolve identically. The rail keeps its richer `Detail` renderer.
 
-type Resolved =
-  | { kind: "ldf_stability"; el: DiagnosticsBundle["ldfStability"][number] }
-  | { kind: "ave"; el: DiagnosticsBundle["ave"][number] }
-  | {
-      kind: "cl_bf_divergence";
-      el: NonNullable<DiagnosticsBundle["clBfDivergence"]>[number];
+/**
+ * Count the interpretation claims that cite a given Diagnostic ID (Story 5.5,
+ * AC3/D4). N = the number of `RecommendationReason`s across all Origin Periods
+ * whose `citations[]` include `id`. This reads only citation-id lists (opaque
+ * strings) — citation-METADATA aggregation, NOT reserve arithmetic (AD-1 clean).
+ * When Epic 6 renders/persists Reserve Report sections, the count extends to
+ * union the report's section citations into the same tally.
+ */
+function countCitingClaims(
+  recommendations: Recommendations,
+  id: string,
+): number {
+  let n = 0;
+  for (const rec of recommendations.recommendations) {
+    for (const reason of rec.reasons) {
+      if (reason.citations.includes(id)) n++;
     }
-  | { kind: "residual"; el: DiagnosticsBundle["residuals"][number] };
-
-function buildIndex(bundle: DiagnosticsBundle): Map<string, Resolved> {
-  const index = new Map<string, Resolved>();
-  for (const el of bundle.ldfStability)
-    index.set(el.id, { kind: "ldf_stability", el });
-  for (const el of bundle.ave) index.set(el.id, { kind: "ave", el });
-  for (const el of bundle.clBfDivergence ?? [])
-    index.set(el.id, { kind: "cl_bf_divergence", el });
-  for (const el of bundle.residuals)
-    index.set(el.id, { kind: "residual", el });
-  return index;
+  }
+  return n;
 }
-
-const KIND_LABEL: Record<Kind, string> = {
-  ldf_stability: "LDF stability",
-  ave: "Actual vs expected",
-  cl_bf_divergence: "CL vs BF divergence",
-  residual: "Residual",
-};
 
 /** A labelled stored value row: label + mono figure. */
 function ValueRow({ label, value }: { label: string; value: string }) {
@@ -59,7 +63,7 @@ function ValueRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-function Detail({ resolved }: { resolved: Resolved }) {
+function Detail({ resolved }: { resolved: ResolvedDiagnostic }) {
   switch (resolved.kind) {
     case "ldf_stability": {
       const el = resolved.el;
@@ -152,13 +156,17 @@ function Detail({ resolved }: { resolved: Resolved }) {
 export function DiagnosticContextRail({
   diagnosticsBundle,
   runId,
+  recommendations,
 }: {
   diagnosticsBundle: DiagnosticsBundle;
   runId: string;
+  // Story 5.5 (AC3): the interpretation-claims citation source. null until an
+  // Interpretation exists — then the "Cited by N report claims" backlink lights up.
+  recommendations?: Recommendations | null;
 }) {
   const { selectedId, clear } = useDiagnosticSelection();
   const resolved = selectedId
-    ? (buildIndex(diagnosticsBundle).get(selectedId) ?? null)
+    ? resolveDiagnostic(buildDiagnosticIndex(diagnosticsBundle), selectedId)
     : null;
 
   return (
@@ -205,15 +213,29 @@ export function DiagnosticContextRail({
             <Detail resolved={resolved} />
           </div>
 
-          {/* Cited by — honest-empty contract shell. Report claims/citations
-              arrive with Interpretation (Epic 5) / the Report editor (Epic 6);
-              no citation query exists yet (AC6). */}
+          {/* Cited by (Story 5.5, AC3/D4) — the honest-empty shell 4.6 left now
+              lights up with the real count. "report claims" = interpretation
+              claims from the recommendations document (the citations source 5.5
+              subscribes to); Epic 6 unions the Reserve Report's section citations
+              into the same count. The "→ view in draft" navigation is deferred
+              (the draft isn't rendered in 5.5) — 5.5 ships the count only. */}
           <div className="border-t border-border pt-3">
             <h4 className="text-sm font-medium">Cited by</h4>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Cited by 0 report claims. Backlinks appear once Interpretation
-              exists.
-            </p>
+            {recommendations == null ? (
+              <p className="mt-1 text-xs text-muted-foreground">
+                Cited by 0 report claims. Backlinks appear once Interpretation
+                exists.
+              </p>
+            ) : (
+              (() => {
+                const n = countCitingClaims(recommendations, resolved.el.id);
+                return (
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Cited by {n} report {n === 1 ? "claim" : "claims"}.
+                  </p>
+                );
+              })()
+            )}
           </div>
 
           <div className="border-t border-border pt-3">

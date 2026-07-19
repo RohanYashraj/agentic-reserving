@@ -9,7 +9,10 @@ import {
 import { afterEach, describe, expect, it } from "vitest";
 
 import { DiagnosticsPanels } from "@/components/DiagnosticsPanels";
-import type { DiagnosticsBundle } from "@/convex/lib/engineContract";
+import type {
+  DiagnosticsBundle,
+  Recommendations,
+} from "@/convex/lib/engineContract";
 
 afterEach(cleanup);
 
@@ -290,6 +293,84 @@ describe("DiagnosticContextRail + selection (Story 4.6)", () => {
     expect(
       railOf(container).getByText("Select any diagnostic element"),
     ).toBeDefined();
+  });
+
+  // Story 5.5 (AC3): the "cited by N report claims" backlink lights up from the
+  // recommendations citation source (D4 — citation-metadata aggregation, AD-1).
+  describe('"cited by N report claims" backlink', () => {
+    function makeRecommendations(citations: string[][]): Recommendations {
+      return {
+        schemaVersion: "1.0.0",
+        runId: "r1",
+        recommendations: [
+          {
+            origin: "2019",
+            method: "chain_ladder",
+            reasons: citations.map((c) => ({ text: "reason", citations: c })),
+          },
+        ],
+      };
+    }
+
+    it("N === 1 → singular 'Cited by 1 report claim.'", () => {
+      const { container } = render(
+        <DiagnosticsPanels
+          diagnosticsBundle={fixture()}
+          runId="r1"
+          recommendations={makeRecommendations([["dx:r1:ave:2019"]])}
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "dx:r1:ave:2019" }));
+      expect(railOf(container).getByText("Cited by 1 report claim.")).toBeDefined();
+    });
+
+    it("N >= 2 → plural 'Cited by N report claims.'", () => {
+      const { container } = render(
+        <DiagnosticsPanels
+          diagnosticsBundle={fixture()}
+          runId="r1"
+          recommendations={makeRecommendations([
+            ["dx:r1:ave:2019"],
+            ["dx:r1:ave:2019", "dx:r1:ldf_stability:12"],
+          ])}
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "dx:r1:ave:2019" }));
+      expect(railOf(container).getByText("Cited by 2 report claims.")).toBeDefined();
+    });
+
+    it("a diagnostic no reason cites → honest 'Cited by 0 report claims.'", () => {
+      const { container } = render(
+        <DiagnosticsPanels
+          diagnosticsBundle={fixture()}
+          runId="r1"
+          recommendations={makeRecommendations([["dx:r1:ave:2019"]])}
+        />,
+      );
+      // ldf_stability:12 is cited by no reason.
+      fireEvent.click(
+        screen.getByRole("button", { name: "dx:r1:ldf_stability:12" }),
+      );
+      expect(
+        railOf(container).getByText("Cited by 0 report claims."),
+      ).toBeDefined();
+    });
+
+    it("recommendations={null} → the honest-empty shell (no interpretation yet)", () => {
+      const { container } = render(
+        <DiagnosticsPanels
+          diagnosticsBundle={fixture()}
+          runId="r1"
+          recommendations={null}
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "dx:r1:ave:2019" }));
+      expect(
+        railOf(container).getByText(
+          /Cited by 0 report claims\. Backlinks appear once Interpretation exists\./i,
+        ),
+      ).toBeDefined();
+    });
   });
 
   it("heatmap is a roving-tabindex grid: arrows move, Enter selects (AC3)", () => {

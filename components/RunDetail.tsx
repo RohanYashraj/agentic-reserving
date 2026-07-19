@@ -3,6 +3,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 
 import { DiagnosticsPanels } from "@/components/DiagnosticsPanels";
+import { InterpretationTab } from "@/components/interpretation/InterpretationTab";
 import { RederivationPanel } from "@/components/RederivationPanel";
 import { ResultsGrid } from "@/components/ResultsGrid";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -14,6 +15,7 @@ import type {
   DiagnosticsBundle,
   Method,
   ReDerivationReport,
+  Recommendations,
   ResultSet,
 } from "@/convex/lib/engineContract";
 
@@ -37,6 +39,9 @@ export type RunView = {
   failedAt: string | null;
   hasResults: boolean;
   hasDiagnostics: boolean;
+  // Story 5.5: gates the Interpretation tab (getRun returns it). A boolean —
+  // NO figures leak (AD-1); the recommendations arrive via getRecommendations.
+  hasRecommendations: boolean;
 };
 
 type TabKey = "results" | "diagnostics" | "interpretation" | "report";
@@ -71,16 +76,26 @@ export function RunDetail({
   run,
   resultSet,
   diagnosticsBundle,
+  recommendations,
   onRetry,
   onRederive,
+  onGenerateInterpretation,
 }: {
   run: RunView;
   resultSet?: ResultSet | null;
   diagnosticsBundle?: DiagnosticsBundle | null;
+  // Story 5.5: the interpretation read surface (getRecommendations) — feeds both
+  // the Interpretation tab and the Diagnostics rail's "cited by N" backlink.
+  recommendations?: Recommendations | null;
   onRetry: () => Promise<void> | void;
   // Story 4.7: re-derive the stored ResultSet from its Lineage (FR-6). Optional
   // so the surface degrades cleanly where it is not wired (and pre-4.7 tests).
   onRederive?: () => Promise<ReDerivationReport>;
+  // Story 5.5: trigger interpretation (generateRecommendations). Optional so the
+  // surface degrades cleanly where it is not wired (and pre-5.5 tests).
+  onGenerateInterpretation?: () => Promise<{
+    status: "accepted" | "rejected";
+  }>;
 }) {
   const [tab, setTab] = useState<TabKey>("results");
   const [retrying, setRetrying] = useState(false);
@@ -269,6 +284,7 @@ export function RunDetail({
               diagnosticsBundle={diagnosticsBundle}
               runId={run._id}
               initialSelectedId={initialSelectedId}
+              recommendations={recommendations ?? null}
             />
           ) : (
             <TabPlaceholder>
@@ -280,9 +296,18 @@ export function RunDetail({
         </TabsContent>
 
         <TabsContent value="interpretation">
-          <TabPlaceholder>
-            Interpretation unlocks after Diagnostics review (Epic 5).
-          </TabPlaceholder>
+          {onGenerateInterpretation ? (
+            <InterpretationTab
+              run={run}
+              recommendations={recommendations ?? null}
+              diagnosticsBundle={diagnosticsBundle ?? null}
+              onGenerateInterpretation={onGenerateInterpretation}
+            />
+          ) : (
+            <TabPlaceholder>
+              Interpretation unlocks after Diagnostics review (Epic 5).
+            </TabPlaceholder>
+          )}
         </TabsContent>
 
         <TabsContent value="report">

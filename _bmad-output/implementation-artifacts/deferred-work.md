@@ -199,3 +199,14 @@
 - `report_flow` shares `AttemptRecord`/`AttemptRejection`/`MAX_ATTEMPTS` with `recommendations_flow` but re-implements the loop + feedback; if a third gated-drafting flow appears, factor the common scaffolding out (the `_report_feedback` vs `_redraft_feedback` origin-vs-section divergence is the seam).
 - The dedicated `reserveReports` table is a deliberate reversal of 5.3's inline-on-runs choice (the Reserve Report is a human-owned artifact, PRD §4.5); revisit only if Epic 6 ever needs it folded back — it won't.
 - `getRun` gains one indexed `by_run` read for `hasReserveReport` (a denormalised boolean on `runs` was rejected to avoid duplicating state).
+
+### Story 5.5
+- The live "attempt N of M" redraft ticker — needs the async `202 + HMAC-signed callback` transport (ARCHITECTURE-SPINE:93/204/209) so the engine's per-attempt progress leaves the one synchronous HTTP call; 5.5 renders skeleton + "Reading diagnostics…" while pending and the quiet gate-failure copy on a rejected outcome (D2).
+- A durable interpretation-status field so the "running" state survives reload — 5.5's transient pending is client `useAction` pending only; the durable state is the `getRecommendations` subscription (accepted/absent), so a reload mid-draft shows "Generate interpretation", not "running" (D2).
+- The friendly `D-LDF-07` chip label — 5.5 renders the canonical `dx:{runId}:{kind}:{key}` id (D3); a `kind` + coordinate → readable-label transform is deferred (4.6 also deferred the friendly-label decision).
+- The CitationChip preview is a hand-rolled, non-focus-trapping positioned `<div>` (zero new deps, the 4.6 posture); promoting it to the shadcn Radix `Tooltip` would add `@radix-ui/react-tooltip` (Task 3.3 decision).
+- The "cited by N report claims" count aggregates ONLY recommendation-reason citations today; Epic 6 unions the Reserve Report's section citations into the same `countCitingClaims` tally (documented at the call site). The mockup's "→ view in draft" backlink navigation is Epic 6 (the draft isn't rendered in 5.5) — 5.5 ships the count only, no dead link.
+- The per-row accepted/overridden status column + the Senior-Actuary Override action/reason dialog (`requireRole(senior_actuary)`, UX-DR11) — Epic 6.3 (in 5.5 every row is uniformly "accepted", so a status column would be noise, D5).
+- The `/runs/{id}/diagnostics` route-segment promotion — still hash-only; the CitationChip fulfils the `#<dxId>` anchor contract via the 4.6 `hashchange` mechanism (D6).
+- Whether "Generate interpretation" should chain the Reserve Report draft (`generateReserveReport`, 5.4) into one action — 5.5 triggers `generateRecommendations` only (the Report tab renders in Epic 6); a combined trigger is an Epic-6 decision (D1).
+- A "Regenerate" affordance on the accepted panel (the backend upserts `runs.recommendations`) — omitted in 5.5 (not an AC); the trigger button only shows in the no-recommendations state.
