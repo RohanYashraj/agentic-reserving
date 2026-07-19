@@ -31,7 +31,6 @@ and ``_isclose_optional`` back from this module.
 
 import math
 import platform
-import sys
 from typing import Literal
 
 from pydantic import BaseModel, field_validator
@@ -52,7 +51,12 @@ from reserving_engine.triangle import Triangle, triangle_hash
 
 # The pinned reproducibility platform (AD-11). Exact equality is required here;
 # every other platform falls back to the documented 1e-8 relative tolerance.
-ON_PINNED_PLATFORM = sys.platform == "linux" and platform.machine() == "x86_64"
+# `platform` only (never `sys`) — `sys` is forbidden inside the pure core by the
+# AD-2 import-linter contract; `platform.system()` returns "Linux" where
+# `sys.platform` returned "linux".
+ON_PINNED_PLATFORM = (
+    platform.system() == "Linux" and platform.machine() == "x86_64"
+)
 
 Tier = Literal["exact", "epsilon"]
 
